@@ -4,6 +4,31 @@
 
 Non ci sono release pubblicate. Compila il sorgente localmente e avvia l'installer generato. I comandi sono per PowerShell su Windows 11: incolla ed esegui **un comando alla volta**.
 
+## Usare l'app compilata: installer o EXE
+
+Per usare l'app compilata non servono Git, Node, Python, Rust o Visual Studio. Questi strumenti servono soltanto allo sviluppo.
+
+- **Installer NSIS:** installazione per utente; se manca WebView2, il setup scarica e apre il bootstrapper Microsoft. Dopo l'installazione avvia Background Audio: se mancano componenti multimediali si apre la configurazione guidata nelle impostazioni.
+- **Solo EXE:** può essere avviato direttamente. Se WebView2 manca, una finestra nativa propone di scaricarlo da Microsoft e avviare l'installazione, verificando prima la firma Windows. Se download/installazione falliscono, viene aperta la pagina ufficiale con istruzioni per riprovare. Quando WebView2 è disponibile parte la stessa guida dell'app installata.
+- **Installa mancanti:** installa in sequenza MPV (`shinchiro.mpv`), yt-dlp (`yt-dlp.yt-dlp`), Streamlink (`Streamlink.Streamlink`), FFmpeg/FFprobe (`Gyan.FFmpeg.Essentials`) e Deno (`DenoLand.Deno`), saltando ciò che è già utilizzabile. Gli installer sono quelli del catalogo WinGet, non copie incorporate. Il pulsante accetta le condizioni WinGet/pacchetti; Windows può richiedere autorizzazioni. Non vengono ignorati hash o controlli di sicurezza.
+- Se WinGet manca, la guida apre **App Installer** Microsoft. Installalo/aggiornalo e premi **Rileva di nuovo**. Se Store o criteri aziendali impediscono l'installazione, ogni componente ha il proprio sito ufficiale e un campo per un eseguibile locale già estratto/installato. Per FFmpeg serve anche FFprobe nella stessa cartella.
+
+Non occorre copiare variabili d'ambiente: l'app legge il PATH attuale e quello salvato in Windows, cerca le cartelle di installazione e passa un PATH dedicato ai processi multimediali. La guida salva eventuali percorsi personalizzati in `tools.json` nella cartella configurazione dell'app. La cartella `bin` accanto all'EXE è supportata; mantieni anche DLL e file accessori degli strumenti. Dopo un'installazione riuscita non serve riavviare il player. Gli installer esterni possono comunque modificare il PATH di Windows secondo le proprie regole.
+
+Serve Internet per scaricare i componenti. L'EXE non è un pacchetto offline autosufficiente: configurazione, account e strumenti restano nel profilo/PC anche spostando l'EXE. Non chiudere l'app dalla tray durante l'installazione. Non esiste annullamento forzato di un installer in corso; dopo timeout controlla i processi Windows prima di riprovare. Gli aggiornamenti automatici dei tool non sono implementati.
+
+Account Twitch/Google opzionali: la guida rimanda alle rispettive impostazioni, senza richiedere variabili d'ambiente per token o client secret.
+
+Fonti: [installer Tauri](https://tauri.app/distribute/windows-installer/), [distribuzione WebView2 Microsoft](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution), [installazione WinGet](https://learn.microsoft.com/en-us/windows/package-manager/winget/install), [requisiti yt-dlp](https://github.com/yt-dlp/yt-dlp#dependencies).
+
+## Dimensionare player e chat
+
+Trascina la barra fra video e chat/commenti, anche con touch. Le frecce su/giù la regolano da tastiera; Home/End raggiungono i limiti. Doppio clic o Invio ripristinano l'altezza automatica. La proporzione scelta viene ricordata e limitata in base allo spazio disponibile, mantenendo accessibili entrambi i pannelli. Video staccato/schermo intero usano il proprio spazio e non mostrano questo separatore.
+
+Il limite precedente di 320 px è rimosso. L'altezza automatica cresce con la finestra e tiene conto di un video 16:9; MPV conserva le proporzioni effettive della sorgente. Un riquadro più largo del video può ancora avere bande laterali: trascina il divisore verso il basso per aumentare l'immagine senza deformarla o ritagliarla.
+
+Questa modifica è solo sviluppo: **nessuna build, test, installazione di prova o avvio dell'app eseguiti**. Da verificare dall'utente su Windows: PC senza tool/WinGet/WebView2, annullamento e rete assente, installazioni con UAC, percorsi con spazi, riavvio e persistenza, riproduzione con Deno/FFmpeg, trascinamento oltre l'area nativa MPV, ridimensionamento/DPI, chat in finestra e schermo intero.
+
 ## Prerequisiti di sviluppo
 
 - [Git per Windows](https://git-scm.com/downloads/win).
@@ -14,7 +39,7 @@ Non ci sono release pubblicate. Compila il sorgente localmente e avvia l'install
 
 Segui i [prerequisiti ufficiali Tauri per Windows](https://v2.tauri.app/start/prerequisites/#windows). Gli strumenti di compilazione sono separati dalle dipendenze di riproduzione seguenti.
 
-## Dipendenze audio
+## Alternativa manuale per gli strumenti
 
 Con Windows Package Manager, esegui separatamente:
 
@@ -27,7 +52,15 @@ winget install --id yt-dlp.yt-dlp --exact --source winget
 ```
 
 ```powershell
-winget install streamlink --source winget
+winget install --id Streamlink.Streamlink --exact --source winget
+```
+
+```powershell
+winget install --id Gyan.FFmpeg.Essentials --exact --source winget
+```
+
+```powershell
+winget install --id DenoLand.Deno --exact --source winget
 ```
 
 Abilita **Add to PATH** se proposto. Un pacchetto già installato secondo WinGet non è necessariamente raggiungibile nel PATH attuale.
@@ -96,7 +129,7 @@ npm run tauri build
 
 Apri da Esplora file l'installer `.exe` in `src-tauri\target\release\bundle\nsis\`. Il prodotto attuale si chiama **Background Audio**; l'eseguibile della build è `src-tauri\target\release\background-audio.exe`.
 
-MPV, yt-dlp e Streamlink **non sono inclusi**. Firma del codice e aggiornamento automatico non sono configurati; Windows può mostrare un avviso per un installer locale non firmato. Questi comandi non pubblicano una release GitHub.
+I tool multimediali **non sono incorporati**: al primo avvio usa la guida descritta sopra. Firma del codice dell'app e aggiornamento automatico non sono configurati; Windows può mostrare un avviso per un installer locale non firmato. Questi comandi non pubblicano una release GitHub.
 
 Se l'app eredita ancora il vecchio PATH, esci dalla tray, aggiorna il PATH come sopra e avviala dalla stessa sessione PowerShell nella cartella principale:
 

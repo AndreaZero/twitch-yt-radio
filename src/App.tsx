@@ -7,17 +7,18 @@ import { isTauri } from '@tauri-apps/api/core';
 import { ChatPanel, TwitchSettings, useTwitchChat } from './TwitchChat';
 import { YoutubePanel, YoutubeSettings, useYoutubeChat } from './YoutubeChat';
 import { useVideoView, VideoSurface, VideoToolbar } from './VideoPanel';
+import { PlayerLayout } from './PlayerLayout';
+import { SetupWizard, useSetup } from './SetupWizard';
 import type { PlaybackMode, Snapshot, EndEvent } from './player-types';
 import {
-  AlertCircle, AudioLines, Check, Headphones, Search, Minus, MessageCircle,
-  ListMusic, LoaderCircle, Pause, Play, ArrowUpRight, RotateCcw,
+  AlertCircle, AudioLines, Headphones, Search, Minus, MessageCircle,
+  ListMusic, LoaderCircle, Pause, Play, ArrowUpRight,
   Settings2, SkipBack, SkipForward, Square, Trash2, Volume2, VolumeX,
   Video, X,
 } from 'lucide-react';
 
 type Platform = 'youtube' | 'twitch';
 type Track = { id: string; url: string; title: string; platform: Platform };
-type Dependencies = { mpv: boolean; ytDlp: boolean; streamlink: boolean };
 
 const STORAGE_KEY = 'background-audio:tracks:v1';
 const VOLUME_KEY = 'background-audio:volume:v1';
@@ -77,9 +78,15 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const videoView = useVideoView(setError);
-  const [dependencies, setDependencies] = useState<Dependencies | null>(null);
+  const setup = useSetup();
+  const offeredSetup = useRef(false);
   const [tab, setTab] = useState<'player' | 'library' | 'settings'>('player');
   const [status, setStatus] = useState('Pronto per riprodurre');
+  useEffect(() => {
+    if (!setup.report || offeredSetup.current) return;
+    offeredSetup.current = true;
+    if (setup.report.tools.some(tool => !tool.available) || setup.report.configurationError) setTab('settings');
+  }, [setup.report]);
   const generationRef = useRef<number | null>(null);
   const currentIdRef = useRef<string | null>(null);
   const tracksRef = useRef(tracks);
@@ -114,11 +121,6 @@ export default function App() {
     void register().catch(e => { if (!disposed) setError(messageOf(e)); });
     return () => { disposed = true; cleanup.forEach(stop => stop()); };
   }, []);
-
-  const refreshDependencies = async () => {
-    try { setDependencies(await invoke<Dependencies>('check_dependencies')); }
-    catch { setDependencies(null); }
-  };
 
   const play = async (track: Track, nextMode = modeRef.current): Promise<void> => {
     if (busyRef.current) return;
@@ -228,10 +230,9 @@ export default function App() {
       if (disposed) stop(); else unlisten = stop;
     }).catch(() => {});
 
-    void Promise.all([invoke<Snapshot>('get_playback_state'), invoke<Dependencies>('check_dependencies')])
-      .then(([snapshot, deps]) => {
+    void invoke<Snapshot>('get_playback_state')
+      .then(snapshot => {
         if (disposed) return;
-        setDependencies(deps);
         if (snapshot.active && snapshot.currentUrl && !busyRef.current && generationRef.current === null) {
           const match = tracksRef.current.find(item => item.url === snapshot.currentUrl);
           activeTrackRef.current = match ?? { id: crypto.randomUUID(), ...sourceFromUrl(snapshot.currentUrl) };
@@ -318,7 +319,7 @@ export default function App() {
   const at = tracks.findIndex(item => item.id === currentId);
   const hasPrev = at > 0 && !busy;
   const hasNext = ((at >= 0 && at < tracks.length - 1) || (at === -1 && tracks.length > 0)) && !busy;
-  const missingDeps = dependencies && (!dependencies.mpv || !dependencies.ytDlp || !dependencies.streamlink);
+  const missingDeps = setup.report?.tools.some(tool => !tool.available);
 
   const windowAction = async (action: 'minimize' | 'close') => {
     if (!isTauri()) return;
@@ -374,7 +375,10 @@ export default function App() {
       {error && <div className="error-message" role="alert"><AlertCircle size={15}/><span>{error}</span><button aria-label="Chiudi errore" onClick={() => setError('')}><X size={14}/></button></div>}
       {missingDeps && <button className="warning" onClick={() => setTab('settings')}><AlertCircle size={14}/> Componenti mancanti · Apri impostazioni <ArrowUpRight size={14}/></button>}
       <div className="content">
-        <section className={`player-page ${(channel && !chat.state.detached) || (youtubeUrl && !youtubeChat.state.detached) ? 'with-chat' : ''}`} hidden={tab !== 'player'} aria-label="Player">
+        <PlayerLayout video={mode === 'video_audio'} withChat={!!((channel && !chat.state.detached) || (youtubeUrl && !youtubeChat.state.detached))} detached={videoView.detached} fullscreen={videoView.fullscreen && !videoView.detached} hidden={tab !== 'player'} community={channel || youtubeUrl ? <>
+          {channel && (chat.state.detached ? <button className="chat-window-link text-button" onClick={() => void chat.command('chat_set_detached', { detached: false })}><MessageCircle size={14}/> Chat in finestra · Reinserisci</button> : <ChatPanel key={channel} channel={channel} chat={chat} onSettings={() => setTab('settings')}/>)}
+          {youtubeUrl && (youtubeChat.state.detached ? <button className="chat-window-link text-button" onClick={() => void youtubeChat.command('youtube_set_detached', { detached: false })}><MessageCircle size={14}/> YouTube in finestra · Reinserisci</button> : <YoutubePanel key={youtubeUrl} chat={youtubeChat} onSettings={() => setTab('settings')}/>)}
+        </> : null}>
           <div className={`media-player ${mode === 'video_audio' ? 'media-video' : 'media-audio'}`}>
           <div className={`player-stage ${mode === 'video_audio' ? 'player-video' : ''}`}>
           {mode === 'video_audio' ? <VideoSurface view={videoView} onError={setError}/> :
@@ -387,9 +391,7 @@ export default function App() {
           </div>
           {(mode !== 'video_audio' || !videoView.enabled || videoView.detached) && playbackControls}
           </div>
-          {channel && (chat.state.detached ? <button className="chat-window-link text-button" onClick={() => void chat.command('chat_set_detached', { detached: false })}><MessageCircle size={14}/> Chat in finestra · Reinserisci</button> : <ChatPanel key={channel} channel={channel} chat={chat} onSettings={() => setTab('settings')}/>)}
-          {youtubeUrl && (youtubeChat.state.detached ? <button className="chat-window-link text-button" onClick={() => void youtubeChat.command('youtube_set_detached', { detached: false })}><MessageCircle size={14}/> YouTube in finestra · Reinserisci</button> : <YoutubePanel key={youtubeUrl} chat={youtubeChat} onSettings={() => setTab('settings')}/>)}
-        </section>
+        </PlayerLayout>
         {tab === 'library' && <section className="library-panel">
           <div className="panel-heading"><h1>Libreria <span className="count">{tracks.length}</span></h1></div>
           <p className="panel-caption">Le tue sorgenti, pronte da riprodurre.</p>
@@ -406,13 +408,9 @@ export default function App() {
         </section>}
         {tab === 'settings' && <section className="settings-panel">
           <div className="panel-heading"><h1>Impostazioni</h1></div>
+          <SetupWizard setup={setup} onDone={() => setTab('player')}/>
           <TwitchSettings chat={chat}/>
           <YoutubeSettings chat={youtubeChat}/>
-          <section className="settings-group">
-            <h2>Motore di riproduzione <button className="icon-button" title="Aggiorna diagnostica" aria-label="Aggiorna diagnostica" onClick={() => void refreshDependencies()}><RotateCcw size={14}/></button></h2>
-            <div className="deps">{([['MPV', 'mpv'], ['yt-dlp', 'ytDlp'], ['Streamlink', 'streamlink']] as const).map(([name, key]) => <div className="dep" key={name}><span>{name}</span><span className={dependencies?.[key] ? 'dep-ok' : 'dep-bad'}>{dependencies?.[key] ? <><Check size={13}/> Disponibile</> : <><AlertCircle size={13}/> Non rilevato</>}</span></div>)}</div>
-            <p className="footnote">Installa i componenti nel PATH di Windows e riavvia l’app.</p>
-          </section>
           <details className="settings-group"><summary>Riproduzione e finestra</summary><p className="footnote">Cambiare Solo audio / Video riapre la sorgente: YouTube riparte dall’inizio e Twitch torna alla diretta. Solo audio richiede audio_only; se manca, la riproduzione si ferma.</p><p className="footnote">Al termine normale parte la sorgente successiva; un errore ferma la playlist. Puoi staccare il video o espanderlo senza riconnetterti.</p><p className="footnote">Chiudere la finestra la nasconde nella tray. Per terminare l’app: icona tray → Esci.</p></details>
         </section>}
       </div>

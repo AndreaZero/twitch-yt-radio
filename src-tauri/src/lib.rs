@@ -1,6 +1,8 @@
+mod bootstrap;
 mod chat;
 mod dependencies;
 mod playback;
+mod setup;
 mod token_store;
 mod video_host;
 mod video_overlay;
@@ -105,12 +107,14 @@ fn available(binary: &str) -> bool {
 }
 
 #[tauri::command]
-fn check_dependencies() -> Dependencies {
-    Dependencies {
+async fn check_dependencies() -> Result<Dependencies, String> {
+    tauri::async_runtime::spawn_blocking(|| Dependencies {
         mpv: available("mpv"),
         yt_dlp: available("yt-dlp"),
         streamlink: available("streamlink"),
-    }
+    })
+    .await
+    .map_err(|_| "Rilevamento componenti interrotto".into())
 }
 
 fn resolve_twitch(url: &str, mode: PlaybackMode) -> Result<String, String> {
@@ -118,6 +122,7 @@ fn resolve_twitch(url: &str, mode: PlaybackMode) -> Result<String, String> {
     // Non ripieghiamo su un flusso video nascosto: consumerebbe banda inutilmente.
     let streamlink = dependencies::resolve("streamlink")?;
     let mut cmd = Command::new(streamlink);
+    dependencies::configure(&mut cmd)?;
     cmd.args(["--stream-url", url, mode.twitch_quality()])
         .stdin(Stdio::null());
     hide_console(&mut cmd);
@@ -213,6 +218,8 @@ fn do_start(
         Source::Youtube => url.clone(),
         Source::Twitch => resolve_twitch(&url, mode)?,
     };
+    let mut command = Command::new(mpv);
+    dependencies::configure(&mut command)?;
     let video_handle = if mode == PlaybackMode::VideoAudio {
         Some(video_host::prepare(&app)?)
     } else {
@@ -228,7 +235,6 @@ fn do_start(
     let pipe_name = format!("background_audio_{}_{}", std::process::id(), generation);
     let pipe_path = format!(r"\\.\pipe\{}", pipe_name);
     let clamped_volume = volume.min(100);
-    let mut command = Command::new(mpv);
     command.args([
         "--no-config",
         "--audio-display=no",
@@ -451,7 +457,11 @@ fn emit_playback_state(app: &AppHandle, shared: &SharedPlayer) {
 }
 
 pub fn run() {
+    if !bootstrap::ensure_webview() {
+        return;
+    }
     tauri::Builder::default()
+        .manage(setup::Setup::default())
         .manage(chat::SharedChat::default())
         .manage(youtube::SharedYoutube::default())
         .manage(video_host::SharedVideoHost::default())
@@ -461,6 +471,10 @@ pub fn run() {
         })))
         .invoke_handler(tauri::generate_handler![
             check_dependencies,
+            setup::setup_report,
+            setup::setup_install,
+            setup::setup_set_path,
+            setup::setup_open_download,
             chat::chat_get_state,
             chat::chat_set_detached,
             chat::chat_open_settings,
@@ -492,6 +506,7 @@ pub fn run() {
             video_host::set_video_fullscreen
         ])
         .setup(|app| {
+            setup::initialize(app.handle());
             chat::restore(app.handle());
             youtube::restore(app.handle());
             let show = MenuItem::with_id(app, "show", "Apri player", true, None::<&str>)?;

@@ -7,6 +7,9 @@
 | File | Responsabilità |
 | --- | --- |
 | `src/App.tsx` | UI React, inserimento URL, playlist, persistenza locale, diagnostica, eventi di riproduzione. |
+| `src/PlayerLayout.tsx` | Divisione verticale video/community, dimensionamento automatico, drag/touch/tastiera e proporzione salvata. ResizeObserver del video continua ad aggiornare l'host nativo. |
+| `src/SetupWizard.tsx` / `src-tauri/src/setup.rs` | Guida comune a installer ed EXE, rilevamento asincrono, coda WinGet con ID fissi, stato condiviso e percorsi locali validati. |
+| `src-tauri/src/bootstrap.rs` | Recupero nativo prima della WebView per EXE su PC privi di WebView2; download Microsoft e verifica Authenticode. |
 | `src/TwitchChat.tsx` | Stato e viste chat, accesso tramite device code e configurazione account. |
 | `src/YoutubeChat.tsx` / `src-tauri/src/youtube.rs` | Chat live e commenti YouTube; OAuth desktop PKCE, rinnovo Google, polling regolato dalle API, paginazione e invio validato. Riutilizza la lista live Twitch. |
 | `src-tauri/src/chat.rs` | OAuth Twitch, token in memoria, EventSub, buffer e moderazione; invio Helix validato per canale/account correnti e gestione rifiuti Twitch. |
@@ -17,7 +20,7 @@
 | `src-tauri/src/lib.rs` | Comandi Rust validati, ciclo dei processi, risoluzione Twitch, IPC MPV, tray. |
 | `src-tauri/src/playback.rs` | Modalità validate e opzioni per formati/input. |
 | `src-tauri/src/video_host.rs` | Host figlio Windows, coordinate fisiche validate e limitate, fullscreen e cambio parent fra finestre dell'app. |
-| `src-tauri/src/dependencies.rs` | Risoluzione e verifica dei percorsi eseguibili, incluse le cartelle di installazione Windows. |
+| `src-tauri/src/dependencies.rs` | Percorsi eseguibili, timeout verifica versione, cache e configurazione per utente; lettura PATH dal registro e ambiente dedicato ai processi multimediali. |
 | `src-tauri/src/main.rs` | Punto di ingresso nativo. |
 | `src-tauri/capabilities/default.json` | Configurazione capability Tauri; nessun plugin shell nel frontend. |
 | `src-tauri/tauri.conf.json` | Finestra, content security policy, integrazione Vite, packaging NSIS. |

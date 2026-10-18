@@ -7,6 +7,9 @@
 | File | Responsibility |
 | --- | --- |
 | `src/App.tsx` | React UI, URL entry, queue, local persistence, dependency diagnostics, playback events. |
+| `src/PlayerLayout.tsx` | Vertical video/community split, automatic sizing, drag/touch/keyboard and saved proportion. Video ResizeObserver continues updating the native host. |
+| `src/SetupWizard.tsx` / `src-tauri/src/setup.rs` | Shared installer/EXE setup, asynchronous discovery, fixed-ID WinGet queue, shared progress and validated local overrides. |
+| `src-tauri/src/bootstrap.rs` | Native recovery before WebView creation when the EXE encounters missing WebView2; Microsoft download and Authenticode verification. |
 | `src/TwitchChat.tsx` | Chat state and views, device-code login and account setup. |
 | `src/YoutubeChat.tsx` / `src-tauri/src/youtube.rs` | YouTube live chat and video comments; desktop PKCE OAuth, Google renewal, API-paced polling, pagination and validated writes. Reuses the Twitch live list. |
 | `src-tauri/src/chat.rs` | Twitch OAuth, in-memory tokens, EventSub, bounded history and moderation; validated Helix sending for the current channel/account and Twitch rejection handling. |
@@ -17,7 +20,7 @@
 | `src-tauri/src/lib.rs` | Validated Rust commands, process lifecycle, Twitch resolution, MPV IPC, tray. |
 | `src-tauri/src/playback.rs` | Validated playback modes and format/input options. |
 | `src-tauri/src/video_host.rs` | Windows child host, validated/clipped physical bounds, fullscreen and reparenting between app windows. |
-| `src-tauri/src/dependencies.rs` | Resolve and validate external executable paths, including Windows install locations. |
+| `src-tauri/src/dependencies.rs` | Executable paths, version-probe deadline, cache and per-user overrides; saved Windows PATH reads and child-specific media environment. |
 | `src-tauri/src/main.rs` | Native entry point. |
 | `src-tauri/capabilities/default.json` | Tauri capability configuration; no frontend shell plugin. |
 | `src-tauri/tauri.conf.json` | Window, content security policy, Vite integration, NSIS packaging. |

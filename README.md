@@ -27,6 +27,8 @@ The current application is displayed as **Background Audio**. The interface and 
 - Persist queue entries and volume in local WebView2 storage.
 - Close the window to keep playing in the Windows tray; **Esci** (Quit) terminates the app and its MPV process.
 - Check external dependencies in settings.
+- First-launch setup for installed and standalone EXEs: install missing tools through WinGet, open official downloads or save validated local paths. WebView2 is handled by the installer or native EXE recovery: [details](docs/INSTALL.en.md).
+- Drag the divider between video and chat/comments; the saved split adapts to window size without a fixed video height cap. Double-click the divider to restore automatic sizing.
 
 ## Get started
 
@@ -54,7 +56,7 @@ To build a local NSIS installer:
 npm run tauri build
 ```
 
-Installer output: `src-tauri\target\release\bundle\nsis\`. **MPV, yt-dlp, and Streamlink are not bundled** and must remain available in the app's PATH.
+Installer output: `src-tauri\target\release\bundle\nsis\`. Media tools are not embedded: in-app setup installs them through WinGet or reuses existing tools. The player does not require manual PATH configuration.
 
 ## Documentation
 
