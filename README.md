@@ -10,10 +10,12 @@ The current application is displayed as **Background Audio**. The interface and 
 
 ## Features
 
-- Add individual YouTube videos or live Twitch channels to a local queue.
+- Dark glass player with a channel/link bar and separate Player, Library and Settings views. Controls share the audio/video frame; Twitch chat appears below the player.
+- Add individual YouTube videos or live Twitch channels to a local queue, including by Twitch channel name.
+- Live Twitch chat with reading and sending from your account, using browser device-code login. Requires a public Twitch application's Client ID: [setup and limitations](docs/TWITCH-CHAT.en.md).
 - Choose **Solo audio** (default) or **Video + audio** in the widget. The choice is saved locally.
 - In audio mode, YouTube requests `bestaudio`; Twitch requests Streamlink's `audio_only` and reports an error when unavailable, without video fallback.
-- Video mode displays MPV **inside the widget by default**, keeping the existing 450 × 670 window and compact controls.
+- Video mode displays MPV **inside the widget by default**, with an initial 450 × 540 window and compact controls. The glass uses Windows Acrylic and depends on system transparency settings.
 - Use the icons next to the mode selector for **fullscreen** or to **detach/reinsert** the player. These operations keep the same stream, playback position and pause state. Fullscreen keeps a control strip with an exit button; Escape also exits when the webview has keyboard focus.
 - The optional detached window is resizable and always on top, with pause, stop, volume, fullscreen and reinsert controls. Closing it returns the video to the widget and continues playback. Each app launch starts with the video embedded; detached/fullscreen placement is not saved.
 - Video mode requests YouTube video up to 720p plus audio, or Twitch's `best` stream. Twitch video may use substantially more bandwidth.

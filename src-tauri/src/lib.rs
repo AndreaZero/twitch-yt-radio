@@ -1,3 +1,4 @@
+mod chat;
 mod dependencies;
 mod playback;
 mod video_host;
@@ -448,6 +449,7 @@ fn emit_playback_state(app: &AppHandle, shared: &SharedPlayer) {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(chat::SharedChat::default())
         .manage(video_host::SharedVideoHost::default())
         .manage(Arc::new(Mutex::new(Player {
             volume: 70,
@@ -455,6 +457,14 @@ pub fn run() {
         })))
         .invoke_handler(tauri::generate_handler![
             check_dependencies,
+            chat::chat_get_state,
+            chat::chat_login,
+            chat::chat_logout,
+            chat::chat_watch,
+            chat::chat_retry,
+            chat::chat_send_message,
+            chat::chat_open_activation,
+            chat::chat_open_developer_console,
             start_playback,
             stop_playback,
             set_paused,

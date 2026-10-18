@@ -2,5 +2,5 @@
   "identifier": "default",
   "description": "Permessi minimi dell'interfaccia del player",
   "windows": ["main", "video"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-minimize", "core:window:allow-close"]
 }

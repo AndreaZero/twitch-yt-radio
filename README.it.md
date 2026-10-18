@@ -10,10 +10,12 @@ L'applicazione attuale si presenta come **Background Audio**. Interfaccia ed err
 
 ## Funzionalità
 
-- Aggiunta di singoli video YouTube o canali Twitch live a una playlist locale.
+- Player in vetro scuro, con barra canale/link e viste separate Player, Libreria e Impostazioni. Controlli integrati nella cornice audio/video; chat sotto il player per le dirette Twitch.
+- Aggiunta di singoli video YouTube o canali Twitch live a una playlist locale, anche scrivendo soltanto il nome del canale Twitch.
+- Chat Twitch live con lettura e invio messaggi dal proprio account, accesso tramite codice nel browser. Richiede il Client ID di un'app Twitch pubblica: [configurazione e limiti](docs/TWITCH-CHAT.it.md).
 - Scelta **Solo audio** (predefinita) o **Video + audio** nel widget, salvata localmente.
 - In modalità audio, YouTube richiede `bestaudio`; Twitch richiede `audio_only` a Streamlink e segnala un errore se non disponibile, senza fallback video.
-- La modalità video mostra MPV **dentro il widget per impostazione predefinita**, mantenendo la finestra 450 × 670 e i controlli compatti.
+- La modalità video mostra MPV **dentro il widget per impostazione predefinita**, con finestra iniziale 450 × 540 e controlli compatti. Il vetro usa Acrylic Windows e dipende dalle impostazioni di trasparenza del sistema.
 - Le icone accanto al selettore permettono **schermo intero** e **distacco/reinserimento** del player. Queste operazioni mantengono lo stesso stream, la posizione e la pausa. A schermo intero resta una barra di controllo con il pulsante per uscire; anche Esc esce quando la webview ha il focus della tastiera.
 - La finestra staccata opzionale è ridimensionabile e sempre in primo piano, con pausa, stop, volume, schermo intero e reinserimento. Chiuderla riporta il video nel widget continuando la riproduzione. Ogni avvio dell'app parte con video integrato; distacco e schermo intero non sono salvati.
 - La modalità video richiede video YouTube fino a 720p con audio, oppure il flusso Twitch `best`. Il video Twitch può consumare molta più banda.

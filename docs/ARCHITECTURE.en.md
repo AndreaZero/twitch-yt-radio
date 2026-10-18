@@ -7,6 +7,8 @@
 | File | Responsibility |
 | --- | --- |
 | `src/App.tsx` | React UI, URL entry, queue, local persistence, dependency diagnostics, playback events. |
+| `src/TwitchChat.tsx` | Chat state and views, device-code login and account setup. |
+| `src-tauri/src/chat.rs` | Twitch OAuth, in-memory tokens, EventSub, bounded history and moderation; validated Helix sending for the current channel/account and Twitch rejection handling. |
 | `src/VideoPanel.tsx` | Video placeholder measurement, view controls, detached window UI and synchronized playback controls. |
 | `src/styles.css` | Compact desktop layout. |
 | `src-tauri/src/lib.rs` | Validated Rust commands, process lifecycle, Twitch resolution, MPV IPC, tray. |

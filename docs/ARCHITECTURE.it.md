@@ -7,6 +7,8 @@
 | File | Responsabilità |
 | --- | --- |
 | `src/App.tsx` | UI React, inserimento URL, playlist, persistenza locale, diagnostica, eventi di riproduzione. |
+| `src/TwitchChat.tsx` | Stato e viste chat, accesso tramite device code e configurazione account. |
+| `src-tauri/src/chat.rs` | OAuth Twitch, token in memoria, EventSub, buffer e moderazione; invio Helix validato per canale/account correnti e gestione rifiuti Twitch. |
 | `src/VideoPanel.tsx` | Misurazione area video, controlli visualizzazione, UI staccata e controlli riproduzione sincronizzati. |
 | `src/styles.css` | Layout desktop compatto. |
 | `src-tauri/src/lib.rs` | Comandi Rust validati, ciclo dei processi, risoluzione Twitch, IPC MPV, tray. |

@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { isTauri } from '@tauri-apps/api/core';
+import { ChatPanel, TwitchSettings, useTwitchChat } from './TwitchChat';
 import { useVideoView, VideoSurface, VideoToolbar } from './VideoPanel';
 import type { PlaybackMode, Snapshot, EndEvent } from './player-types';
 import {
-  AlertCircle, AudioLines, Check, ChevronDown, CircleHelp, Headphones,
-  Link2, ListMusic, LoaderCircle, Pause, Play, Plus, Radio, RotateCcw,
+  AlertCircle, AudioLines, Check, Headphones, Search, Minus,
+  ListMusic, LoaderCircle, Pause, Play, ArrowUpRight, RotateCcw,
   Settings2, SkipBack, SkipForward, Square, Trash2, Volume2, VolumeX,
   Video, X,
 } from 'lucide-react';
@@ -34,9 +37,13 @@ function loadTracks(): Track[] {
 }
 
 function sourceFromUrl(input: string): { url: string; platform: Platform; title: string } {
+  const trimmed = input.trim();
+  if (/^@?[a-zA-Z0-9_]{1,25}$/.test(trimmed)) input = `https://www.twitch.tv/${trimmed.replace(/^@/, '')}`;
+  else if (/^(www\.)?(twitch\.tv|youtube\.com|youtu\.be)\//i.test(trimmed)) input = `https://${trimmed}`;
   let value: URL;
   try { value = new URL(input.trim()); } catch { throw new Error('Inserisci un link valido con https://'); }
   if (value.protocol !== 'https:') throw new Error('Usa un URL HTTPS');
+  if (value.username || value.password) throw new Error('Il link non può contenere credenziali');
   const host = value.hostname.toLowerCase();
   if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be'].includes(host)) {
     const id = value.searchParams.get('v') || value.pathname.split('/').filter(Boolean).at(-1) || '';
@@ -45,8 +52,8 @@ function sourceFromUrl(input: string): { url: string; platform: Platform; title:
   }
   if (['twitch.tv', 'www.twitch.tv', 'm.twitch.tv'].includes(host)) {
     const channel = value.pathname.split('/').filter(Boolean).at(0);
-    if (!channel) throw new Error('Aggiungi il nome del canale Twitch');
-    return { url: value.href, platform: 'twitch', title: `Twitch · ${channel}` };
+    if (!channel || !/^[a-zA-Z0-9_]{1,25}$/.test(channel) || value.pathname.split('/').filter(Boolean).length !== 1 || ['videos', 'directory', 'downloads', 'settings', 'search'].includes(channel.toLowerCase())) throw new Error('Inserisci un canale Twitch live, non un video o una pagina Twitch');
+    return { url: `https://www.twitch.tv/${channel.toLowerCase()}`, platform: 'twitch', title: channel };
   }
   throw new Error('Per ora sono supportati solo link YouTube e Twitch');
 }
@@ -70,8 +77,7 @@ export default function App() {
   const [error, setError] = useState('');
   const videoView = useVideoView(setError);
   const [dependencies, setDependencies] = useState<Dependencies | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
+  const [tab, setTab] = useState<'player' | 'library' | 'settings'>('player');
   const [status, setStatus] = useState('Pronto per riprodurre');
   const generationRef = useRef<number | null>(null);
   const currentIdRef = useRef<string | null>(null);
@@ -88,6 +94,7 @@ export default function App() {
   useEffect(() => { currentIdRef.current = currentId; }, [currentId]);
   useEffect(() => { localStorage.setItem(VOLUME_KEY, String(volume)); }, [volume]);
   useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
+  useEffect(() => { if (videoView.fullscreen && !videoView.detached) setTab('player'); }, [videoView.fullscreen, videoView.detached]);
 
   const refreshDependencies = async () => {
     try { setDependencies(await invoke<Dependencies>('check_dependencies')); }
@@ -110,6 +117,7 @@ export default function App() {
       setCurrentId(track.id);
       setPaused(false);
       setActive(true);
+      setTab('player');
       setStatus(nextMode === 'video_audio' ? 'Video nel widget' : 'Riproduzione avviata');
     } catch (e) {
       setError(messageOf(e));
@@ -278,113 +286,109 @@ export default function App() {
     catch (e) { if (isActive) setError(messageOf(e)); }
   };
 
-  const current = tracks.find(item => item.id === currentId);
+  const current = tracks.find(item => item.id === currentId) ?? activeTrackRef.current;
+  const channel = isActive && current?.platform === 'twitch' ? new URL(current.url).pathname.split('/').filter(Boolean)[0] ?? null : null;
+  const chat = useTwitchChat(channel);
   const at = tracks.findIndex(item => item.id === currentId);
   const hasPrev = at > 0 && !busy;
   const hasNext = ((at >= 0 && at < tracks.length - 1) || (at === -1 && tracks.length > 0)) && !busy;
   const missingDeps = dependencies && (!dependencies.mpv || !dependencies.ytDlp || !dependencies.streamlink);
 
+  const windowAction = async (action: 'minimize' | 'close') => {
+    if (!isTauri()) return;
+    try { await getCurrentWindow()[action](); } catch (e) { setError(messageOf(e)); }
+  };
+  const tabs = [
+    { id: 'player', label: 'Player', icon: AudioLines },
+    { id: 'library', label: 'Libreria', icon: ListMusic },
+    { id: 'settings', label: 'Impostazioni', icon: Settings2 },
+  ] as const;
+
+  const playbackControls = (
+    <section className="player-controls" aria-label="Controlli di riproduzione">
+        <div className="now-playing"><div className="track-mark">{current?.platform === 'youtube' ? <Video size={18}/> : <AudioLines size={18}/>}</div><div className="track-details"><strong>{current?.title.replace(/^Twitch · /, '') ?? 'Nessuna sorgente'}</strong><span role="status">{busy ? 'Connessione…' : isActive && paused ? 'In pausa' : status}</span></div>{isActive && current?.platform === 'twitch' && <span className="live-pill">LIVE</span>}</div>
+        <div className="controls-row">
+          <div className="transport">
+            <button className="icon-button" title="Precedente" aria-label="Precedente" onClick={() => void jump(-1)} disabled={!hasPrev}><SkipBack size={18}/></button>
+            <button className="play-button" title={isActive && !paused ? 'Pausa' : 'Riproduci'} aria-label={isActive && !paused ? 'Pausa' : 'Riproduci'} disabled={busy || (!isActive && !current && !tracks.length)} onClick={() => {
+              if (isActive) void togglePause(); else if (current) void play(current); else if (tracks[0]) void play(tracks[0]);
+            }}>{busy ? <LoaderCircle className="spinning" size={20}/> : isActive && !paused ? <Pause size={20} fill="currentColor"/> : <Play size={20} fill="currentColor"/>}</button>
+            <button className="icon-button" title="Successivo" aria-label="Successivo" onClick={() => void jump(1)} disabled={!hasNext}><SkipForward size={18}/></button>
+            <button className="icon-button" title="Stop" aria-label="Stop" disabled={!isActive || busy} onClick={() => void stop()}><Square size={14}/></button>
+          </div>
+          <div className="mode-switch" role="group" aria-label="Modalità di riproduzione">
+            <button title="Solo audio · il cambio riavvia la sorgente" aria-label="Solo audio" aria-pressed={mode === 'audio_only'} disabled={busy} onClick={() => void changeMode('audio_only')}><Headphones size={16}/></button>
+            <button title="Video e audio · il cambio riavvia la sorgente" aria-label="Video e audio" aria-pressed={mode === 'video_audio'} disabled={busy} onClick={() => void changeMode('video_audio')}><Video size={16}/></button>
+          </div>
+          {mode === 'video_audio' && <VideoToolbar view={videoView} disabled={busy} onError={setError}/>}
+        </div>
+        <div className="volume-row"><button className="icon-button" title={volume ? 'Disattiva audio' : 'Riattiva audio'} aria-label={volume ? 'Disattiva audio' : 'Riattiva audio'} onClick={() => { setVolume(volume > 0 ? 0 : 70); void saveVolume(volume > 0 ? 0 : 70); }}>{volume ? <Volume2 size={16}/> : <VolumeX size={16}/>}</button>
+          <input aria-label="Volume" type="range" min="0" max="100" step="1" value={volume} onChange={e => setVolume(Number(e.target.value))} onPointerUp={e => void saveVolume(Number(e.currentTarget.value))} onKeyUp={e => void saveVolume(Number(e.currentTarget.value))} style={{ '--volume': `${volume}%` } as CSSProperties}/><span>{volume}%</span>
+        </div>
+      </section>
+  );
+
   return (
     <main className={`app ${videoView.fullscreen && !videoView.detached ? 'video-fullscreen' : ''}`}>
-      <header className="header">
-        <div className="brand-logo"><AudioLines size={23} strokeWidth={2.2} /></div>
-        <div className="brand-title">
-          <strong>Background Audio</strong>
-          <span>YOUR SOUND. YOUR VIEW.</span>
+      <header className="topbar">
+        <div className="drag-handle" data-tauri-drag-region title="Trascina la finestra"><span/><span/></div>
+        <form className="search-form" onSubmit={event => { event.preventDefault(); void addUrl(); }}>
+          <Search size={16} aria-hidden="true"/>
+          <input aria-label="Canale Twitch o link YouTube" value={input} onChange={e => setInput(e.target.value)} placeholder="Canale Twitch o link…" spellCheck={false}/>
+          <button type="submit" title="Apri e riproduci" aria-label="Apri e riproduci" disabled={!input.trim() || busy}><ArrowUpRight size={17}/></button>
+        </form>
+        <div className="window-actions">
+          <button className="icon-button" title="Riduci a icona" aria-label="Riduci a icona" onClick={() => void windowAction('minimize')}><Minus size={15}/></button>
+          <button className="icon-button" title="Nascondi nella tray" aria-label="Nascondi nella tray" onClick={() => void windowAction('close')}><X size={15}/></button>
         </div>
-        <button className="icon-button settings-trigger" title="Impostazioni" onClick={() => setShowSettings(value => !value)}>
-          {showSettings ? <X size={18} /> : <Settings2 size={18} />}
-        </button>
       </header>
-
-      {showSettings ? (
-        <section className="settings-panel">
-          <div className="section-title">Diagnostica motore <button className="tiny-button" onClick={() => void refreshDependencies()}><RotateCcw size={13}/> Aggiorna</button></div>
-          <div className="deps">
-            {([['MPV', 'mpv'], ['yt-dlp', 'ytDlp'], ['Streamlink', 'streamlink']] as const).map(([name, key]) => (
-              <div className="dep" key={name}>
-                <span>{name}</span>
-                {dependencies?.[key] ? <span className="dep-ok"><Check size={14}/> Trovato</span> : <span className="dep-bad"><AlertCircle size={14}/> Non rilevato</span>}
-              </div>
-            ))}
-          </div>
-          <p className="footnote">Le dipendenze devono essere nel PATH di Windows. Se le hai appena installate, riavvia l'app.</p>
-          <p className="footnote">Chiudendo la finestra il player resta nella tray. Per terminarlo: icona tray → Esci.</p>
-          <p className="footnote">Video + audio mostra il video dentro il widget. Usa le icone accanto al selettore per staccarlo o andare a schermo intero. Chiudere la finestra staccata riporta il video qui, senza interromperlo. Solo audio riconnette la sorgente senza richiedere video.</p>
-        </section>
-      ) : (
-        <>
-          <section className={`hero ${mode === 'video_audio' ? 'hero-video' : ''}`}>
-            {mode === 'video_audio' ? <VideoSurface view={videoView} onError={setError}/> : <div className={`sound-art ${isActive && !paused ? 'art-live' : ''}`}>
-              <Headphones size={52} strokeWidth={1.4} />
-              <div className="art-glow" />
+      <nav className="navigation" aria-label="Viste">
+        {tabs.map(({ id, label, icon: Icon }) => <button key={id} aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)}><Icon size={16}/><span>{label}</span>{id === 'library' && tracks.length > 0 && <small>{tracks.length}</small>}</button>)}
+      </nav>
+      {error && <div className="error-message" role="alert"><AlertCircle size={15}/><span>{error}</span><button aria-label="Chiudi errore" onClick={() => setError('')}><X size={14}/></button></div>}
+      {missingDeps && <button className="warning" onClick={() => setTab('settings')}><AlertCircle size={14}/> Componenti mancanti · Apri impostazioni <ArrowUpRight size={14}/></button>}
+      <div className="content">
+        <section className={`player-page ${channel ? 'with-chat' : ''}`} hidden={tab !== 'player'} aria-label="Player">
+          <div className={`media-player ${mode === 'video_audio' ? 'media-video' : 'media-audio'}`}>
+          <div className={`player-stage ${mode === 'video_audio' ? 'player-video' : ''}`}>
+          {mode === 'video_audio' ? <VideoSurface view={videoView} onError={setError}/> :
+            <div className={`audio-visual ${isActive && !paused ? 'playing' : ''}`} aria-hidden="true">
+              <div className="audio-halo"/>
+              <div className="waveform">{[13, 24, 37, 18, 49, 70, 44, 29, 56, 82, 61, 35, 50, 72, 43, 24, 54, 36, 19, 29, 12].map((height, i) => <i key={i} style={{ '--bar-height': `${height}px`, '--delay': `${i * -0.13}s` } as CSSProperties}/>)}</div>
+              <span className="visual-label">{isActive ? paused ? 'IN PAUSA' : 'SOLO AUDIO' : 'PRONTO AD ASCOLTARE'}</span>
             </div>}
-            <div className="status"><span className={`status-dot ${isActive && !paused ? 'dot-live' : ''}`} />{busy ? 'Connessione' : isActive ? paused ? 'In pausa' : mode === 'video_audio' ? 'Video + audio attivi' : 'Audio attivo' : 'In attesa'}</div>
-            <h1>{current?.title ?? (mode === 'video_audio' ? 'Guarda in piccolo' : 'Ascolta senza video')}</h1>
-            <p className="hero-description">{status}</p>
-            <div className="view-row"><div className="mode-switch" role="group" aria-label="Modalità di riproduzione">
-              <button aria-pressed={mode === 'audio_only'} disabled={busy} onClick={() => void changeMode('audio_only')}><Headphones size={14}/> Solo audio</button>
-              <button aria-pressed={mode === 'video_audio'} disabled={busy} onClick={() => void changeMode('video_audio')}><Video size={14}/> Video + audio</button>
-            </div>
-            {mode === 'video_audio' && <VideoToolbar view={videoView} disabled={busy} onError={setError}/>}</div>
-            {videoView.fullscreen && !videoView.detached && error && <div className="fullscreen-error" role="alert">{error}</div>}
-            <p className="mode-hint">{isActive ? 'Cambiare modalità riavvia la sorgente' : mode === 'video_audio' ? 'Video nel widget · stacca o espandi con le icone' : 'Solo flusso audio · nessun video'}</p>
-            <div className="controls">
-              <button className="icon-button" aria-label="Precedente" onClick={() => void jump(-1)} disabled={!hasPrev}><SkipBack size={21} fill="currentColor"/></button>
-              <button className="play-button" aria-label={isActive && !paused ? 'Pausa' : 'Riproduci'} disabled={busy || (!isActive && tracks.length === 0)} onClick={() => {
-                if (isActive) void togglePause();
-                else if (current) void play(current);
-                else if (tracks[0]) void play(tracks[0]);
-              }}>
-                {busy ? <LoaderCircle className="spinning" size={25}/> : isActive && !paused ? <Pause fill="currentColor" size={26}/> : <Play fill="currentColor" size={25}/>}
+          {!current && <div className="stage-caption">Incolla un link o scrivi un canale Twitch.</div>}
+          </div>
+          {playbackControls}
+          </div>
+          {channel && <ChatPanel key={channel} channel={channel} chat={chat} onSettings={() => setTab('settings')}/>}
+        </section>
+        {tab === 'library' && <section className="library-panel">
+          <div className="panel-heading"><h1>Libreria <span className="count">{tracks.length}</span></h1></div>
+          <p className="panel-caption">Le tue sorgenti, pronte da riprodurre.</p>
+          <div className="queue-list">
+            {!tracks.length ? <div className="empty-state"><ListMusic size={28}/><p>La tua prossima sorgente va qui.</p><small>Aggiungi un canale o un link dalla barra in alto.</small></div> : tracks.map(item => <div className={`queue-item ${item.id === currentId ? 'queue-active' : ''}`} key={item.id}>
+              <button className="queue-main" onClick={() => void play(item)} title={item.url} disabled={busy}>
+                <span className="source-icon">{item.platform === 'twitch' ? <AudioLines size={19}/> : <Video size={19}/>}</span>
+                <span className="queue-info"><strong>{item.title.replace(/^Twitch · /, '')}</strong><span>{item.platform === 'twitch' ? 'Twitch · diretta' : 'YouTube'}</span></span>
+                {item.id === currentId && isActive ? <span className="status-dot dot-live"/> : <Play size={14}/>}
               </button>
-              <button className="icon-button" aria-label="Successivo" onClick={() => void jump(1)} disabled={!hasNext}><SkipForward size={21} fill="currentColor"/></button>
-            </div>
-            <div className="volume-row">
-              <button className="icon-button volume-icon" aria-label="Mute" onClick={() => { setVolume(volume > 0 ? 0 : 70); void saveVolume(volume > 0 ? 0 : 70); }}>
-                {volume === 0 ? <VolumeX size={18}/> : <Volume2 size={18}/>}
-              </button>
-              <input aria-label="Volume" type="range" min="0" max="100" step="1" value={volume} onChange={e => setVolume(Number(e.target.value))} onPointerUp={e => void saveVolume(Number((e.target as HTMLInputElement).value))} onKeyUp={e => void saveVolume(Number((e.target as HTMLInputElement).value))} style={{ '--volume': `${volume}%` } as CSSProperties} />
-              <span className="volume-value">{volume}%</span>
-              <button className="stop-button" aria-label="Stop" title="Stop" disabled={!isActive || busy} onClick={() => void stop()}><Square size={15} fill="currentColor"/></button>
-            </div>
+              <button className="icon-button queue-delete" disabled={busy} onClick={() => void remove(item.id)} aria-label={`Rimuovi ${item.title}`} title="Rimuovi dalla libreria"><Trash2 size={15}/></button>
+            </div>)}
+          </div>
+        </section>}
+        {tab === 'settings' && <section className="settings-panel">
+          <div className="panel-heading"><h1>Impostazioni</h1></div>
+          <TwitchSettings chat={chat}/>
+          <section className="settings-group">
+            <h2>Motore di riproduzione <button className="icon-button" title="Aggiorna diagnostica" aria-label="Aggiorna diagnostica" onClick={() => void refreshDependencies()}><RotateCcw size={14}/></button></h2>
+            <div className="deps">{([['MPV', 'mpv'], ['yt-dlp', 'ytDlp'], ['Streamlink', 'streamlink']] as const).map(([name, key]) => <div className="dep" key={name}><span>{name}</span><span className={dependencies?.[key] ? 'dep-ok' : 'dep-bad'}>{dependencies?.[key] ? <><Check size={13}/> Disponibile</> : <><AlertCircle size={13}/> Non rilevato</>}</span></div>)}</div>
+            <p className="footnote">Installa i componenti nel PATH di Windows e riavvia l’app.</p>
           </section>
-
-          <section className="url-section">
-            <div className="url-header"><span>AGGIUNGI SORGENTE</span><div><Radio size={13}/> Twitch <span className="dot-divider">·</span> YouTube</div></div>
-            <form className="url-form" onSubmit={event => { event.preventDefault(); void addUrl(); }}>
-              <Link2 size={18} className="link-icon" />
-              <input aria-label="URL YouTube o Twitch" value={input} onChange={e => setInput(e.target.value)} placeholder="Incolla un link YouTube o Twitch..." />
-              <button type="submit" aria-label="Aggiungi e riproduci" disabled={!input.trim() || busy}><Plus size={19}/></button>
-            </form>
-            {error && <div className="error-message"><AlertCircle size={15}/><span>{error}</span><button aria-label="Chiudi errore" onClick={() => setError('')}><X size={13}/></button></div>}
-            {missingDeps && <button className="warning" onClick={() => setShowSettings(true)}><AlertCircle size={15}/> Componenti non rilevati. Apri Diagnostica <ChevronDown size={14}/></button>}
-          </section>
-
-          <section className="queue-section">
-            <div className="queue-head"><h2><ListMusic size={17}/> Playlist <span>{tracks.length}</span></h2>
-              <button className="tiny-button" onClick={() => setShowHelp(value => !value)} title="Come funziona"><CircleHelp size={16}/></button>
-            </div>
-            {showHelp && <p className="help">Il video parte dentro il widget. Puoi staccarlo, reinserirlo e passare a schermo intero senza riconnettere lo stream. Chiudere la finestra staccata reinserisce il video. Il cambio Solo audio / Video + audio riavvia invece YouTube dall'inizio e riconnette Twitch alla diretta. Al termine normale parte il successivo; un errore ferma la playlist.</p>}
-            <div className="queue-list">
-              {tracks.length === 0 ? (
-                <div className="queue-empty"><ListMusic size={24}/><span>Nessuna sorgente aggiunta</span><small>I link appariranno qui</small></div>
-              ) : tracks.map((item, index) => {
-                const active = item.id === currentId;
-                return <div className={`queue-item ${active ? 'queue-active' : ''}`} key={item.id}>
-                  <button className="queue-main" onClick={() => void play(item)} title={item.url} disabled={busy}>
-                    <span className="queue-number">{active && isActive && !paused ? <AudioLines size={16}/> : String(index + 1).padStart(2, '0')}</span>
-                    <span className="queue-info"><strong>{item.title}</strong><span className="queue-url">{item.url}</span></span>
-                    <span className={`platform-tag ${item.platform}`}>{item.platform === 'twitch' ? 'LIVE' : 'YT'}</span>
-                  </button>
-                  <button className="queue-delete" disabled={busy} onClick={() => void remove(item.id)} title="Rimuovi"><Trash2 size={16}/></button>
-                </div>;
-              })}
-            </div>
-          </section>
-          <footer><span><span className="footer-dot"/> ENGINE: MPV</span><span>{mode === 'video_audio' ? 'VIDEO + AUDIO' : 'SOLO AUDIO'} · v0.1</span></footer>
-        </>
-      )}
+          <details className="settings-group"><summary>Riproduzione e finestra</summary><p className="footnote">Cambiare Solo audio / Video riapre la sorgente: YouTube riparte dall’inizio e Twitch torna alla diretta. Solo audio richiede audio_only; se manca, la riproduzione si ferma.</p><p className="footnote">Al termine normale parte la sorgente successiva; un errore ferma la playlist. Puoi staccare il video o espanderlo senza riconnetterti.</p><p className="footnote">Chiudere la finestra la nasconde nella tray. Per terminare l’app: icona tray → Esci.</p></details>
+        </section>}
+      </div>
+      {tab !== 'player' && <div className="background-controls">{playbackControls}</div>}
     </main>
   );
 }

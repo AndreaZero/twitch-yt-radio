@@ -136,6 +136,7 @@ export function DetachedPlayer() {
     try { await invoke(command, args); } catch (e) { setError(String(e)); }
   };
   return <main className="detached-player">
+    <div className="media-player media-video">
     <VideoSurface view={view} onError={setError}/>
     <div className="detached-controls">
       <button className="icon-button" disabled={!snapshot?.active} aria-label={snapshot?.paused ? 'Riprendi' : 'Pausa'}
@@ -148,6 +149,7 @@ export function DetachedPlayer() {
         onPointerUp={event => void control('set_volume', { volume: Number(event.currentTarget.value) })}
         onKeyUp={event => void control('set_volume', { volume: Number(event.currentTarget.value) })}/>
       <VideoToolbar view={view} onError={setError}/>
+    </div>
     </div>
     {error && <div className="detached-error" role="alert">{error}</div>}
   </main>;
