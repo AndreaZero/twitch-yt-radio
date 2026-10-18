@@ -4,6 +4,16 @@
 
 Run PowerShell commands one at a time. Never overwrite the entire saved PATH with only the three playback folders.
 
+## `cargo metadata`: program not found
+
+The Tauri CLI cannot find Cargo in the terminal's inherited PATH. `npm run tauri dev` and `npm run tauri build` also look for `cargo.exe` in `%CARGO_HOME%\bin`, or `%USERPROFILE%\.cargo\bin` when `CARGO_HOME` is unset. This directory is added only to the launch process environment and its children; the saved Windows PATH stays unchanged. Cargo already available in PATH keeps precedence.
+
+Retry `npm run tauri dev`. If Cargo is still missing, install [Rust through rustup](https://rustup.rs/) or set `CARGO_HOME` for a custom installation. Check the standard installation without launching the app:
+
+```powershell
+& "$env:USERPROFILE\.cargo\bin\cargo.exe" --version
+```
+
 ## Executables not found
 
 An installed WinGet package and an executable reachable through PATH are different things. Start with:

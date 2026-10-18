@@ -4,6 +4,16 @@
 
 Esegui i comandi PowerShell uno alla volta. Non sostituire tutto il PATH salvato con le sole tre cartelle delle dipendenze audio.
 
+## `cargo metadata`: program not found
+
+La CLI Tauri non trova Cargo nel PATH ereditato dal terminale. `npm run tauri dev` e `npm run tauri build` cercano anche `cargo.exe` in `%CARGO_HOME%\bin`, oppure `%USERPROFILE%\.cargo\bin` quando `CARGO_HOME` non è impostato. La cartella viene aggiunta solo all'ambiente del processo di avvio e dei suoi figli; il PATH Windows salvato resta invariato. Un Cargo già presente nel PATH mantiene la precedenza.
+
+Riprova `npm run tauri dev`. Se Cargo risulta ancora assente, installa [Rust tramite rustup](https://rustup.rs/) oppure imposta `CARGO_HOME` per un'installazione personalizzata. Puoi verificare l'installazione standard senza avviare l'app:
+
+```powershell
+& "$env:USERPROFILE\.cargo\bin\cargo.exe" --version
+```
+
 ## Eseguibili non trovati
 
 Un pacchetto installato secondo WinGet e un eseguibile raggiungibile nel PATH sono due cose diverse. Inizia con:
