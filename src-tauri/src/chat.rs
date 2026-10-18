@@ -1,14 +1,14 @@
-//! Twitch EventSub and message sending. Credentials stay in Rust memory.
+//! Twitch EventSub, messaging and a session protected by Windows Credential Manager.
 use futures_util::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex},
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const WS: &str = "wss://eventsub.wss.twitch.tv/ws";
@@ -34,6 +34,7 @@ pub struct ChatSnapshot {
     version: u64,
     login: Option<String>,
     can_send: bool,
+    detached: bool,
     channel: Option<String>,
     status: String,
     error: String,
@@ -42,13 +43,17 @@ pub struct ChatSnapshot {
     messages: VecDeque<ChatMessage>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Credentials {
     client_id: String,
     access: String,
     refresh: String,
     user_id: String,
     can_write: bool,
+    #[serde(default)]
+    login: String,
+    #[serde(skip)]
+    persistence: Option<(Arc<AtomicU64>, u64)>,
 }
 type SharedCredentials = Arc<tokio::sync::Mutex<Credentials>>;
 
@@ -64,6 +69,135 @@ pub struct Chat {
     broadcaster_id: Option<String>,
     send_lock: Arc<tokio::sync::Mutex<()>>,
     last_send: Option<Instant>,
+    store_generation: Arc<AtomicU64>,
+}
+
+fn persist(auth: &Credentials) -> Result<(), String> {
+    if let Some((generation, expected)) = &auth.persistence {
+        crate::token_store::save(auth, generation, *expected)?;
+    }
+    Ok(())
+}
+
+pub fn restore(app: &AppHandle) {
+    let shared = app.state::<SharedChat>().inner().clone();
+    let Ok(mut c) = shared.lock() else {
+        return;
+    };
+    let epoch = c.auth_epoch;
+    let generation = c.store_generation.clone();
+    c.snapshot.status = "Ripristino account Twitch…".into();
+    announce(app, &mut c);
+    let app = app.clone();
+    let idle_app = app.clone();
+    let worker = shared.clone();
+    c.auth_task = Some(tauri::async_runtime::spawn(async move {
+        let result = restore_account(&app, &worker, epoch, generation).await;
+        if let Err(error) = result {
+            if let Ok(mut c) = worker.lock() {
+                if c.auth_epoch == epoch {
+                    c.snapshot.status = "Account da ricollegare".into();
+                    c.snapshot.error = error;
+                    announce(&app, &mut c);
+                }
+            }
+        }
+    }));
+    // Validate/refresh idle sessions too. Active chat already validates hourly.
+    let idle_shared = shared.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(3000)).await;
+            let session = idle_shared.lock().ok().and_then(|c| {
+                if c.snapshot.channel.is_none() {
+                    c.credentials.clone().map(|auth| (auth, c.auth_epoch))
+                } else {
+                    None
+                }
+            });
+            let Some((credentials, epoch)) = session else {
+                continue;
+            };
+            let result = prepare_credentials(&client(), &credentials).await;
+            if let Ok(mut c) = idle_shared.lock() {
+                if c.auth_epoch != epoch {
+                    continue;
+                }
+                match result {
+                    Ok(_) => {
+                        if !c.snapshot.error.is_empty() {
+                            c.snapshot.error.clear();
+                            announce(&idle_app, &mut c);
+                        }
+                    }
+                    Err((permanent, error)) => {
+                        if permanent {
+                            let removal = crate::token_store::clear(&c.store_generation, epoch + 1);
+                            c.credentials = None;
+                            c.snapshot.login = None;
+                            c.snapshot.can_send = false;
+                            c.snapshot.status = "Ricollega Twitch".into();
+                            c.snapshot.error = removal.err().unwrap_or(error);
+                        } else {
+                            c.snapshot.error = error;
+                        }
+                        announce(&idle_app, &mut c);
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn restore_account(
+    app: &AppHandle,
+    shared: &SharedChat,
+    epoch: u64,
+    generation: Arc<AtomicU64>,
+) -> Result<(), String> {
+    let Some(mut saved) = crate::token_store::read::<Credentials>()? else {
+        let mut c = shared.lock().map_err(|_| "Chat non disponibile")?;
+        if c.auth_epoch == epoch {
+            c.snapshot.status = "Collega Twitch nelle impostazioni".into();
+            announce(app, &mut c);
+        }
+        return Ok(());
+    };
+    saved.persistence = Some((generation, epoch));
+    let credentials = Arc::new(tokio::sync::Mutex::new(saved));
+    let mut delay = 2;
+    loop {
+        match prepare_credentials(&client(), &credentials).await {
+            Ok(auth) => {
+                let mut c = shared.lock().map_err(|_| "Chat non disponibile")?;
+                if c.auth_epoch != epoch {
+                    return Ok(());
+                }
+                c.snapshot.login = Some(auth.login);
+                c.snapshot.can_send = auth.can_write;
+                c.snapshot.error.clear();
+                c.credentials = Some(credentials);
+                restart(app, shared, &mut c);
+                return Ok(());
+            }
+            Err((permanent, error)) => {
+                {
+                    let mut c = shared.lock().map_err(|_| "Chat non disponibile")?;
+                    if c.auth_epoch != epoch {
+                        return Ok(());
+                    }
+                    if permanent {
+                        crate::token_store::clear(&c.store_generation, epoch + 1)?;
+                        return Err(error);
+                    }
+                    c.snapshot.error = error;
+                    announce(app, &mut c);
+                }
+                tokio::time::sleep(Duration::from_secs(delay)).await;
+                delay = (delay * 2).min(30);
+            }
+        }
+    }
 }
 
 fn client() -> Client {
@@ -97,6 +231,52 @@ pub fn chat_get_state(state: State<'_, SharedChat>) -> Result<ChatSnapshot, Stri
         .map_err(|_| "Chat non disponibile")?
         .snapshot
         .clone())
+}
+
+#[tauri::command]
+pub fn chat_open_settings(app: AppHandle) -> Result<(), String> {
+    let main = app
+        .get_webview_window("main")
+        .ok_or("Player non disponibile")?;
+    app.emit_to("main", "open-twitch-settings", ())
+        .map_err(|e| e.to_string())?;
+    main.show().map_err(|e| e.to_string())?;
+    main.set_focus().map_err(|e| e.to_string())
+}
+
+pub fn close_detached(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<SharedChat>();
+    let mut c = state.lock().map_err(|_| "Chat non disponibile")?;
+    if let Some(window) = app.get_webview_window("chat") {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+    c.snapshot.detached = false;
+    announce(app, &mut c);
+    if let Some(main) = app.get_webview_window("main") {
+        main.show().map_err(|e| e.to_string())?;
+        main.set_focus().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn chat_set_detached(
+    detached: bool,
+    app: AppHandle,
+    state: State<'_, SharedChat>,
+) -> Result<(), String> {
+    if !detached {
+        return close_detached(&app);
+    }
+    let window = app
+        .get_webview_window("chat")
+        .ok_or("Finestra chat non disponibile")?;
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    let mut c = state.lock().map_err(|_| "Chat non disponibile")?;
+    c.snapshot.detached = true;
+    announce(&app, &mut c);
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -136,6 +316,7 @@ async fn validate(http: &Client, auth: &Credentials) -> Result<Value, SessionErr
         .await
         .map_err(|_| (false, "Risposta Twitch non valida".into()))?;
     if v["client_id"].as_str() != Some(&auth.client_id)
+        || (!auth.user_id.is_empty() && v["user_id"].as_str() != Some(auth.user_id.as_str()))
         || !v["scopes"]
             .as_array()
             .is_some_and(|s| s.iter().any(|s| s == READ_SCOPE))
@@ -162,6 +343,7 @@ pub fn chat_login(
     }
     let shared = state.inner().clone();
     let mut c = shared.lock().map_err(|_| "Chat non disponibile")?;
+    crate::token_store::clear(&c.store_generation, c.auth_epoch + 1)?;
     if let Some(task) = c.auth_task.take() {
         task.abort();
     }
@@ -276,9 +458,13 @@ async fn authorize(
             refresh: tokens.refresh_token,
             user_id: String::new(),
             can_write: false,
+            login: String::new(),
+            persistence: None,
         };
         let identity = validate(&http, &auth).await.map_err(|(_, e)| e)?;
-        auth.can_write = identity["scopes"].as_array().is_some_and(|s| s.iter().any(|s| s == WRITE_SCOPE));
+        auth.can_write = identity["scopes"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|s| s == WRITE_SCOPE));
         auth.user_id = identity["user_id"]
             .as_str()
             .ok_or("Account Twitch non valido")?
@@ -288,6 +474,12 @@ async fn authorize(
             if c.auth_epoch != epoch {
                 return Ok(());
             }
+            auth.login = identity["login"]
+                .as_str()
+                .ok_or("Nome account Twitch non valido")?
+                .into();
+            auth.persistence = Some((c.store_generation.clone(), epoch));
+            persist(&auth)?;
             c.snapshot.can_send = auth.can_write;
             c.credentials = Some(Arc::new(tokio::sync::Mutex::new(auth)));
             c.snapshot.login = identity["login"].as_str().map(str::to_owned);
@@ -366,6 +558,7 @@ pub fn chat_retry(app: AppHandle, state: State<'_, SharedChat>) -> Result<(), St
 #[tauri::command]
 pub fn chat_logout(app: AppHandle, state: State<'_, SharedChat>) -> Result<(), String> {
     let mut c = state.lock().map_err(|_| "Chat non disponibile")?;
+    crate::token_store::clear(&c.store_generation, c.auth_epoch + 1)?;
     if let Some(task) = c.auth_task.take() {
         task.abort();
     }
@@ -383,45 +576,92 @@ pub fn chat_logout(app: AppHandle, state: State<'_, SharedChat>) -> Result<(), S
 
 fn validate_outgoing_message(message: &str) -> Result<&str, String> {
     let message = message.trim();
-    if message.is_empty() { return Err("Scrivi un messaggio prima di inviare".into()); }
-    if message.chars().count() > 500 { return Err("Il messaggio supera i 500 caratteri consentiti da Twitch".into()); }
-    if message.chars().any(char::is_control) { return Err("Il messaggio deve essere su una sola riga e senza caratteri di controllo".into()); }
+    if message.is_empty() {
+        return Err("Scrivi un messaggio prima di inviare".into());
+    }
+    if message.chars().count() > 500 {
+        return Err("Il messaggio supera i 500 caratteri consentiti da Twitch".into());
+    }
+    if message.chars().any(char::is_control) {
+        return Err(
+            "Il messaggio deve essere su una sola riga e senza caratteri di controllo".into(),
+        );
+    }
     Ok(message)
 }
 
 #[tauri::command]
-pub async fn chat_send_message(channel: String, message: String, state: State<'_, SharedChat>) -> Result<(), String> {
+pub async fn chat_send_message(
+    channel: String,
+    message: String,
+    state: State<'_, SharedChat>,
+) -> Result<(), String> {
     let message = validate_outgoing_message(&message)?.to_owned();
     let channel = channel.to_ascii_lowercase();
-    if !valid_channel(&channel) { return Err("Canale Twitch non valido".into()); }
+    if !valid_channel(&channel) {
+        return Err("Canale Twitch non valido".into());
+    }
     let shared = state.inner().clone();
     let (credentials, broadcaster, epoch, send_lock) = {
         let c = shared.lock().map_err(|_| "Chat non disponibile")?;
-        if c.snapshot.channel.as_deref() != Some(channel.as_str()) || c.snapshot.status != "In diretta" {
+        if c.snapshot.channel.as_deref() != Some(channel.as_str())
+            || c.snapshot.status != "In diretta"
+        {
             return Err("Attendi la connessione alla chat del canale corrente".into());
         }
-        if !c.snapshot.can_send { return Err("Ricollega Twitch nelle impostazioni per autorizzare l'invio dei messaggi".into()); }
-        (c.credentials.clone().ok_or("Collega prima il tuo account Twitch")?,
-            c.broadcaster_id.clone().ok_or("Canale chat non ancora pronto")?, c.chat_epoch, c.send_lock.clone())
+        if !c.snapshot.can_send {
+            return Err(
+                "Ricollega Twitch nelle impostazioni per autorizzare l'invio dei messaggi".into(),
+            );
+        }
+        (
+            c.credentials
+                .clone()
+                .ok_or("Collega prima il tuo account Twitch")?,
+            c.broadcaster_id
+                .clone()
+                .ok_or("Canale chat non ancora pronto")?,
+            c.chat_epoch,
+            c.send_lock.clone(),
+        )
     };
-    let _permit = send_lock.try_lock_owned().map_err(|_| "Un messaggio è già in invio. Attendi".to_string())?;
+    let _permit = send_lock
+        .try_lock_owned()
+        .map_err(|_| "Un messaggio è già in invio. Attendi".to_string())?;
     let http = client();
-    let auth = prepare_credentials(&http, &credentials).await.map_err(|(_, e)| e)?;
-    if !auth.can_write { return Err("Manca il permesso user:write:chat. Ricollega Twitch nelle impostazioni".into()); }
+    let auth = prepare_credentials(&http, &credentials)
+        .await
+        .map_err(|(_, e)| e)?;
+    if !auth.can_write {
+        return Err(
+            "Manca il permesso user:write:chat. Ricollega Twitch nelle impostazioni".into(),
+        );
+    }
     {
         let mut c = shared.lock().map_err(|_| "Chat non disponibile")?;
         // Never redirect a pending send to a channel/account selected in the meantime.
-        if c.chat_epoch != epoch || c.snapshot.channel.as_deref() != Some(channel.as_str()) || c.snapshot.status != "In diretta" {
+        if c.chat_epoch != epoch
+            || c.snapshot.channel.as_deref() != Some(channel.as_str())
+            || c.snapshot.status != "In diretta"
+        {
             return Err("Invio annullato: canale o account cambiato".into());
         }
-        if c.last_send.is_some_and(|at| at.elapsed() < Duration::from_secs(1)) { return Err("Attendi un secondo prima di inviare un altro messaggio".into()); }
+        if c.last_send
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(1))
+        {
+            return Err("Attendi un secondo prima di inviare un altro messaggio".into());
+        }
         c.last_send = Some(Instant::now());
     }
     // A failed/ambiguous POST is never retried automatically: that could duplicate a message.
-    let response = http.post("https://api.twitch.tv/helix/chat/messages")
-        .bearer_auth(&auth.access).header("Client-Id", &auth.client_id)
+    let response = http
+        .post("https://api.twitch.tv/helix/chat/messages")
+        .bearer_auth(&auth.access)
+        .header("Client-Id", &auth.client_id)
         .json(&json!({"broadcaster_id":broadcaster,"sender_id":auth.user_id,"message":message}))
-        .send().await.map_err(|_| "Esito invio non confermato. Controlla la chat prima di riprovare")?;
+        .send()
+        .await
+        .map_err(|_| "Esito invio non confermato. Controlla la chat prima di riprovare")?;
     match response.status().as_u16() {
         200 => {},
         401 => return Err("Accesso scaduto o permesso di scrittura mancante. Ricollega Twitch".into()),
@@ -430,10 +670,18 @@ pub async fn chat_send_message(channel: String, message: String, state: State<'_
         n if n >= 500 => return Err("Esito invio non confermato da Twitch. Controlla la chat prima di riprovare".into()),
         n => return Err(format!("Messaggio rifiutato da Twitch (HTTP {n}). Verifica testo e regole del canale")),
     }
-    let value: Value = response.json().await.map_err(|_| "Risposta di invio non leggibile. Controlla la chat prima di riprovare")?;
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|_| "Risposta di invio non leggibile. Controlla la chat prima di riprovare")?;
     let result = &value["data"][0];
     if result["is_sent"].as_bool() != Some(true) {
-        let reason: String = result["drop_reason"]["message"].as_str().unwrap_or("Controlla AutoMod e le regole del canale").chars().take(300).collect();
+        let reason: String = result["drop_reason"]["message"]
+            .as_str()
+            .unwrap_or("Controlla AutoMod e le regole del canale")
+            .chars()
+            .take(300)
+            .collect();
         return Err(format!("Messaggio non pubblicato: {reason}"));
     }
     // EventSub supplies our own message, so the UI does not create a second local copy.
@@ -530,6 +778,8 @@ async fn refresh(http: &Client, auth: &mut Credentials) -> Result<(), SessionErr
     })?;
     auth.access = tokens.access_token;
     auth.refresh = tokens.refresh_token;
+    // Save the new single-use refresh token before any further network await.
+    persist(auth).map_err(|e| (true, e))?;
     Ok(())
 }
 
@@ -551,7 +801,11 @@ async fn prepare_credentials(
                 validate(&http, &auth).await?
             }
         };
-        auth.can_write = identity["scopes"].as_array().is_some_and(|s| s.iter().any(|s| s == WRITE_SCOPE));
+        auth.can_write = identity["scopes"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|s| s == WRITE_SCOPE));
+        auth.login = identity["login"].as_str().unwrap_or(&auth.login).to_owned();
+        persist(&auth).map_err(|e| (true, e))?;
         Ok(auth.clone())
     })
     .await
@@ -615,8 +869,12 @@ async fn session(
         .ok_or((true, "Canale Twitch inesistente".into()))?
         .to_owned();
     {
-        let mut c = shared.lock().map_err(|_| (true, "Chat non disponibile".to_string()))?;
-        if c.chat_epoch != epoch { return Err((true, "Sessione chat cambiata".into())); }
+        let mut c = shared
+            .lock()
+            .map_err(|_| (true, "Chat non disponibile".to_string()))?;
+        if c.chat_epoch != epoch {
+            return Err((true, "Sessione chat cambiata".into()));
+        }
         c.broadcaster_id = Some(broadcaster.clone());
         c.snapshot.can_send = auth.can_write;
     }

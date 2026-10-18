@@ -10,6 +10,8 @@
 | `src/TwitchChat.tsx` | Chat state and views, device-code login and account setup. |
 | `src-tauri/src/chat.rs` | Twitch OAuth, in-memory tokens, EventSub, bounded history and moderation; validated Helix sending for the current channel/account and Twitch rejection handling. |
 | `src/VideoPanel.tsx` | Video placeholder measurement, view controls, detached window UI and synchronized playback controls. |
+| `src/VideoControls.tsx` / `src-tauri/src/video_overlay.rs` | Owned transparent control windows, native video hover/timeout and synchronized commands. |
+| `src-tauri/src/token_store.rs` | Windows credentials, session restoration and protection against post-logout persistence races. |
 | `src/styles.css` | Compact desktop layout. |
 | `src-tauri/src/lib.rs` | Validated Rust commands, process lifecycle, Twitch resolution, MPV IPC, tray. |
 | `src-tauri/src/playback.rs` | Validated playback modes and format/input options. |

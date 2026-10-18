@@ -10,6 +10,8 @@ MPV communicates through a local Windows named pipe, not a listening TCP server.
 
 Do not paste private URLs with tokens, credentials, or secrets into the queue or public issues. Keep MPV, yt-dlp, and Streamlink updated through their original installation method.
 
+Twitch OAuth tokens are stored in Windows Credential Manager under `dev.andreazero.backgroundaudio/twitch`, scoped to the current Windows user, and never sent to React or written to source/config files. Disconnect deletes the stored session. Other software running as the same Windows user is outside this protection boundary. Twitch receives the chat requests and messages explicitly submitted by the user.
+
 For suspected vulnerabilities, use [GitHub private vulnerability reporting](https://github.com/AndreaZero/twitch-yt-radio/security/advisories/new) if enabled. If unavailable, open an issue asking for a private reporting channel without posting exploit details or secrets. This is a personal MVP with no promised response time or security maintenance window.
 
 ## Italiano
@@ -19,5 +21,7 @@ Il frontend chiama comandi Rust specifici. Rust valida gli host HTTPS supportati
 MPV comunica tramite named pipe Windows locale, non un server TCP in ascolto. Il nome è unico per processo/generazione ma manca autenticazione a livello applicativo: non esporre l'IPC a software non fidato nella stessa sessione Windows. Non ci sono backend ospitato, telemetria dell'app o playlist cloud. URL e volume restano nello storage WebView2 locale; servizi streaming e strumenti esterni ricevono le richieste necessarie alla riproduzione.
 
 Non inserire URL privati con token, credenziali o segreti nella playlist o nelle issue pubbliche. Mantieni aggiornati MPV, yt-dlp e Streamlink usando il metodo di installazione originale.
+
+I token OAuth Twitch sono salvati in Gestione credenziali Windows con nome `dev.andreazero.backgroundaudio/twitch`, per il profilo Windows corrente. Non passano a React né a file sorgente/configurazione. Scollega elimina la sessione salvata. Il software che gira con lo stesso utente Windows resta fuori da questo confine di protezione. Twitch riceve le richieste chat e i messaggi inviati esplicitamente dall'utente.
 
 Per sospette vulnerabilità, usa la [segnalazione privata GitHub](https://github.com/AndreaZero/twitch-yt-radio/security/advisories/new) se abilitata. Se non disponibile, apri una issue chiedendo un canale privato senza pubblicare dettagli di exploit o segreti. È un MVP personale senza tempi di risposta o periodo di manutenzione di sicurezza garantiti.

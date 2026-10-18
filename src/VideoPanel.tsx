@@ -11,6 +11,13 @@ type ErrorHandler = (message: string) => void;
 export function useVideoView(onError: ErrorHandler) {
   const [view, setView] = useState<VideoView>({ detached: false, fullscreen: false, enabled: false });
   useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && view.fullscreen) void invoke('set_video_fullscreen', { fullscreen: false }).catch(e => onError(String(e)));
+    };
+    window.addEventListener('keydown', escape);
+    return () => window.removeEventListener('keydown', escape);
+  }, [view.fullscreen, onError]);
+  useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
     const cleanup: (() => void)[] = [];
@@ -82,13 +89,6 @@ export function VideoToolbar({ view, disabled = false, onError }: { view: VideoV
     try { await invoke(command, args); } catch (error) { onError(String(error)); }
     finally { setWorking(false); }
   };
-  useEffect(() => {
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && view.fullscreen) void change('set_video_fullscreen', { fullscreen: false });
-    };
-    window.addEventListener('keydown', escape);
-    return () => window.removeEventListener('keydown', escape);
-  }, [view.fullscreen, working]);
 
   return <div className="video-toolbar">
     <button className="icon-button" disabled={disabled || working || (!view.enabled && !view.detached)}
@@ -138,7 +138,7 @@ export function DetachedPlayer() {
   return <main className="detached-player">
     <div className="media-player media-video">
     <VideoSurface view={view} onError={setError}/>
-    <div className="detached-controls">
+    {(!view.enabled || !view.detached) && <div className="detached-controls">
       <button className="icon-button" disabled={!snapshot?.active} aria-label={snapshot?.paused ? 'Riprendi' : 'Pausa'}
         onClick={() => void control('set_paused', { paused: !snapshot?.paused })}>
         {snapshot?.paused ? <Play size={18}/> : <Pause size={18}/>}
@@ -149,7 +149,7 @@ export function DetachedPlayer() {
         onPointerUp={event => void control('set_volume', { volume: Number(event.currentTarget.value) })}
         onKeyUp={event => void control('set_volume', { volume: Number(event.currentTarget.value) })}/>
       <VideoToolbar view={view} onError={setError}/>
-    </div>
+    </div>}
     </div>
     {error && <div className="detached-error" role="alert">{error}</div>}
   </main>;

@@ -1,17 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { ExternalLink, LogOut, MessageCircle, RotateCcw, Send, Twitch } from 'lucide-react';
+import { ArrowDownLeft, ExternalLink, LogOut, MessageCircle, RotateCcw, Send, Twitch } from 'lucide-react';
 
 type ChatMessage = { id: string; userId: string; name: string; text: string; color: string };
 type ChatState = {
-  version: number; login: string | null; canSend: boolean; channel: string | null; status: string; error: string;
+  version: number; login: string | null; canSend: boolean; detached: boolean; channel: string | null; status: string; error: string;
   userCode: string | null; verificationUri: string | null; messages: ChatMessage[];
+  moderation?: ChatDelta[];
 };
 type ChatDelta = { version: number; kind: 'message' | 'delete' | 'clearUser' | 'clear'; message?: ChatMessage; target?: string };
-const initial: ChatState = { version: 0, login: null, canSend: false, channel: null, status: 'Collega Twitch nelle impostazioni', error: '', userCode: null, verificationUri: null, messages: [] };
+const initial: ChatState = { version: 0, login: null, canSend: false, detached: false, channel: null, status: 'Collega Twitch nelle impostazioni', error: '', userCode: null, verificationUri: null, messages: [] };
 
-export function useTwitchChat(channel: string | null) {
+function mergeSnapshot(previous: ChatState, snapshot: ChatState): ChatState {
+  if (snapshot.version < previous.version) return previous;
+  return { ...snapshot, moderation: snapshot.channel === previous.channel && snapshot.login === previous.login ? previous.moderation : [] };
+}
+
+export function useTwitchChat(channel?: string | null) {
   const [state, setState] = useState<ChatState>(initial);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -20,10 +26,13 @@ export function useTwitchChat(channel: string | null) {
     const cleanup: (() => void)[] = [];
     const subscribe = async () => {
       const stopState = await listen<ChatState>('twitch-chat-state', event => {
-        if (!disposed) setState(previous => event.payload.version >= previous.version ? event.payload : previous);
+        if (!disposed) setState(previous => mergeSnapshot(previous, event.payload));
       });
       if (disposed) { stopState(); return; }
       cleanup.push(stopState);
+      const stopWindowError = await listen<string>('chat-window-error', event => { if (!disposed) setError(event.payload); });
+      if (disposed) { stopWindowError(); return; }
+      cleanup.push(stopWindowError);
       const stopMessages = await listen<ChatDelta>('twitch-chat-event', ({ payload }) => {
         if (disposed) return;
         setState(previous => {
@@ -35,19 +44,21 @@ export function useTwitchChat(channel: string | null) {
             case 'clearUser': messages = messages.filter(m => m.userId !== payload.target); break;
             case 'clear': messages = []; break;
           }
-          return { ...previous, version: payload.version, messages };
+          const moderation = payload.kind === 'message' ? previous.moderation : [...(previous.moderation ?? []), payload].slice(-1000);
+          return { ...previous, version: payload.version, messages, moderation };
         });
       });
       if (disposed) { stopMessages(); return; }
       cleanup.push(stopMessages);
       const snapshot = await invoke<ChatState>('chat_get_state');
-      if (!disposed) setState(previous => snapshot.version >= previous.version ? snapshot : previous);
+      if (!disposed) setState(previous => mergeSnapshot(previous, snapshot));
     };
     void subscribe().catch(e => { if (!disposed) setError(String(e)); });
     return () => { disposed = true; cleanup.forEach(stop => stop()); };
   }, []);
   useEffect(() => {
-    if (isTauri()) void invoke('chat_watch', { channel }).catch(e => setError(String(e)));
+    // The detached chat observes the same session; only the main player selects channels.
+    if (isTauri() && channel !== undefined) void invoke('chat_watch', { channel }).catch(e => setError(String(e)));
   }, [channel]);
   const command = async (name: string, args?: Record<string, unknown>) => {
     setError('');
@@ -68,8 +79,16 @@ export function ChatPanel({ chat, channel, onSettings }: { chat: TwitchChat; cha
   const messages = matchesChannel ? state.messages : [];
   const ready = matchesChannel && state.status === 'In diretta';
   const list = useRef<HTMLDivElement>(null);
-  const follow = useRef(true);
-  const [following, setFollowing] = useState(true);
+  const [displayed, setDisplayed] = useState(messages);
+  const [hovered, setHovered] = useState(false);
+  const [manualPause, setManualPause] = useState(false);
+  const [selectionPause, setSelectionPause] = useState(false);
+  const [hoverOverride, setHoverOverride] = useState(false);
+  const paused = manualPause || selectionPause || (hovered && !hoverOverride);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+  const userScroll = useRef(false);
+  const moderationVersion = useRef(0);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState('');
@@ -93,27 +112,80 @@ export function ChatPanel({ chat, channel, onSettings }: { chat: TwitchChat; cha
       if (revision === context.current) setSendError(error instanceof Error ? error.message : String(error));
     } finally { sendingRef.current = false; setSending(false); }
   };
+  useLayoutEffect(() => {
+    setManualPause(false); setSelectionPause(false); setHovered(false); setHoverOverride(false);
+    userScroll.current = false; moderationVersion.current = 0;
+  }, [channel, state.login]);
+  useLayoutEffect(() => {
+    const changes = (state.moderation ?? []).filter(event => event.version > moderationVersion.current);
+    moderationVersion.current = state.version;
+    if (!paused) { setDisplayed(matchesChannel ? state.messages : []); return; }
+    // Freeze new rows while reading, but still honor moderation. Buffer eviction
+    // in the live stream must not remove the rows currently being read.
+    if (changes.length) setDisplayed(previous => changes.reduce((rows, event) => {
+      if (event.kind === 'clear') return [];
+      if (event.kind === 'delete') return rows.filter(row => row.id !== event.target);
+      if (event.kind === 'clearUser') return rows.filter(row => row.userId !== event.target);
+      return rows;
+    }, previous));
+  }, [state.version, state.messages, state.moderation, matchesChannel, paused]);
+  useLayoutEffect(() => {
+    if (!paused && list.current) list.current.scrollTop = list.current.scrollHeight;
+  }, [displayed, paused]);
   useEffect(() => {
-    if (follow.current && list.current) list.current.scrollTop = list.current.scrollHeight;
-  }, [state.messages]);
-  useEffect(() => { follow.current = true; setFollowing(true); }, [state.channel]);
+    const target = list.current;
+    if (!target) return;
+    const observer = new ResizeObserver(() => {
+      if (!pausedRef.current) target.scrollTop = target.scrollHeight;
+    });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [state.login]);
+  useEffect(() => {
+    const selectionChanged = () => {
+      const selection = window.getSelection();
+      const target = list.current;
+      setSelectionPause(!!target && !!selection && !selection.isCollapsed &&
+        (target.contains(selection.anchorNode) || target.contains(selection.focusNode)));
+    };
+    document.addEventListener('selectionchange', selectionChanged);
+    return () => document.removeEventListener('selectionchange', selectionChanged);
+  }, []);
+  const resume = () => {
+    userScroll.current = false;
+    window.getSelection()?.removeAllRanges();
+    setManualPause(false); setSelectionPause(false); setHoverOverride(true);
+    setDisplayed(messages);
+    requestAnimationFrame(() => { if (list.current) list.current.scrollTop = list.current.scrollHeight; });
+  };
+  const unseen = messages.filter(message => !displayed.some(row => row.id === message.id)).length;
   return <section className="chat-panel" aria-label="Chat Twitch">
     <div className="panel-heading"><h1><Twitch size={15}/>{`#${channel}`}</h1>
-      <button className="icon-button" title="Riconnetti chat" aria-label="Riconnetti chat" disabled={!state.login || !state.channel} onClick={() => void chat.command('chat_retry')}><RotateCcw size={16}/></button>
+      <div className="chat-actions"><button className="icon-button" title={state.detached ? 'Reinserisci chat nel player' : 'Apri chat in finestra'} aria-label={state.detached ? 'Reinserisci chat nel player' : 'Apri chat in finestra'} onClick={() => void chat.command('chat_set_detached', { detached: !state.detached })}>{state.detached ? <ArrowDownLeft size={16}/> : <ExternalLink size={16}/>}</button>
+      <button className="icon-button" title="Riconnetti chat" aria-label="Riconnetti chat" disabled={!state.login || !state.channel} onClick={() => void chat.command('chat_retry')}><RotateCcw size={16}/></button></div>
     </div>
     <p className="panel-caption" role="status"><span className={`status-dot ${ready ? 'dot-live' : ''}`}/>{matchesChannel ? state.status : 'Connessione chat…'}</p>
     {matchesChannel && (state.error || chat.error) && <p className="inline-error" role="alert">{state.error || chat.error}</p>}
     {!state.login ? <div className="empty-state"><MessageCircle size={28}/><p>La chat, accanto al tuo ascolto.</p><button className="text-button" onClick={onSettings}>Collega il tuo account Twitch</button></div> :
-      <div className="chat-messages" ref={list} role="log" aria-label="Messaggi in diretta" aria-live="off" onScroll={() => {
+      <div className="chat-messages" ref={list} role="log" aria-label="Messaggi in diretta" aria-live="off" tabIndex={0}
+      onPointerEnter={event => { if (event.pointerType === 'mouse') setHovered(true); }}
+      onPointerLeave={() => { setHovered(false); setHoverOverride(false); userScroll.current = false; }}
+      onWheel={event => { userScroll.current = true; if (event.deltaY < 0 && event.currentTarget.scrollHeight > event.currentTarget.clientHeight + 8) setManualPause(true); }}
+      onPointerDown={() => { userScroll.current = true; }}
+      onTouchStart={() => { userScroll.current = true; }}
+      onKeyDown={event => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) userScroll.current = true; }}
+      onScroll={() => {
         const el = list.current;
-        if (!el) return;
-        follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 45;
-        setFollowing(follow.current);
+        // Programmatic scroll and layout changes never turn live-follow off.
+        if (!el || !userScroll.current) return;
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 8;
+        setManualPause(!atBottom);
+        if (atBottom) setHoverOverride(true);
       }}>
-        {!messages.length && <div className="empty-state"><p>In attesa di nuovi messaggi</p></div>}
-        {messages.map(message => <p className="chat-message" key={message.id}><strong style={{ color: /^#[0-9a-f]{6}$/i.test(message.color) ? message.color : undefined }}>{message.name}</strong><span>{message.text}</span></p>)}
+        {!displayed.length && <div className="empty-state"><p>In attesa di nuovi messaggi</p></div>}
+        {displayed.map(message => <p className="chat-message" key={message.id}><strong style={{ color: /^#[0-9a-f]{6}$/i.test(message.color) ? message.color : undefined }}>{message.name}</strong><span>{message.text}</span></p>)}
       </div>}
-    {!following && <button className="follow-chat text-button" onClick={() => { follow.current = true; setFollowing(true); if (list.current) list.current.scrollTop = list.current.scrollHeight; }}>Torna ai messaggi live ↓</button>}
+    {paused && <button className="follow-chat text-button" onPointerEnter={() => setHovered(true)} onPointerLeave={() => setHovered(false)} onClick={resume}>Scorrimento in pausa{unseen ? ` · ${unseen >= 200 ? '200+' : unseen} nuovi` : ''} · Torna al live ↓</button>}
     {state.login && <>
       {!state.canSend && <button className="text-button chat-upgrade" onClick={onSettings}>Autorizza l’invio nelle impostazioni</button>}
       <form className="chat-composer" onSubmit={event => { event.preventDefault(); void submit(); }}>
@@ -147,7 +219,15 @@ export function TwitchSettings({ chat }: { chat: TwitchChat }) {
     </>}
     {state.userCode && <div className="activation"><span>Autorizza Twitch nel browser</span><strong>{state.userCode}</strong><button className="text-button primary" onClick={() => void chat.command('chat_open_activation')}><ExternalLink size={14}/> Apri Twitch</button></div>}
     {pending && <button className="text-button" onClick={() => void chat.command('chat_logout')}>Annulla accesso</button>}
-    <p className="footnote">Accesso per questa sessione. Token solo in memoria; permessi di lettura e invio messaggi. I messaggi partono soltanto quando premi Invia.</p>
+    <p className="footnote">Account ricordato in Gestione credenziali Windows. Scollega rimuove l’accesso salvato. Lettura e invio messaggi; i messaggi partono soltanto quando premi Invia.</p>
     {(state.error || chat.error) && <p className="inline-error" role="alert">{state.error || chat.error}</p>}
   </section>;
+}
+
+export function DetachedChat() {
+  const chat = useTwitchChat();
+  return <main className="detached-chat">
+    {chat.state.channel ? <ChatPanel key={chat.state.channel} channel={chat.state.channel} chat={chat} onSettings={() => void chat.command('chat_open_settings')}/> :
+      <div className="empty-state"><MessageCircle size={28}/><p>Avvia un canale Twitch nel player.</p><button className="text-button" onClick={() => void chat.command('chat_set_detached', { detached: false })}>Torna al player</button></div>}
+  </main>;
 }

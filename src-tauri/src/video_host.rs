@@ -72,6 +72,12 @@ pub struct VideoHost {
 
 pub type SharedVideoHost = Mutex<VideoHost>;
 
+pub fn overlay_target(app: &AppHandle) -> Result<(usize, bool, bool), String> {
+    let state = app.state::<SharedVideoHost>();
+    let host = state.lock().map_err(|_| "Area video non disponibile")?;
+    Ok((host.handle, host.view.detached, host.view.enabled))
+}
+
 // Called only from blocking worker threads, never from a window event handler.
 pub fn on_ui<T: Send + 'static>(
     app: &AppHandle,
@@ -117,6 +123,11 @@ fn layout(app: &AppHandle, host: &VideoHost) -> Result<(), String> {
 
 pub fn prepare(app: &AppHandle) -> Result<u32, String> {
     on_ui(app, |app| {
+        if app.get_webview_window("controls-main").is_none()
+            || app.get_webview_window("controls-video").is_none()
+        {
+            crate::video_overlay::start(app).map_err(|e| format!("Controlli video: {e}"))?;
+        }
         let state = app.state::<SharedVideoHost>();
         let mut host = state.lock().map_err(|_| "Area video non disponibile")?;
         if host.handle == 0 {
@@ -172,7 +183,10 @@ pub fn close_detached(app: &AppHandle) -> Result<(), String> {
 }
 
 fn validate_caller(window: &WebviewWindow) -> Result<(), String> {
-    if matches!(window.label(), "main" | "video") {
+    if matches!(
+        window.label(),
+        "main" | "video" | "controls-main" | "controls-video"
+    ) {
         Ok(())
     } else {
         Err("Finestra non autorizzata per il player".into())
@@ -195,6 +209,9 @@ pub async fn update_video_bounds(
     bounds: VideoBounds,
 ) -> Result<(), String> {
     validate_caller(&window)?;
+    if !matches!(window.label(), "main" | "video") {
+        return Err("Questa finestra non possiede l'area video".into());
+    }
     let bounds = bounds.validate()?;
     let detached = window.label() == "video";
     tauri::async_runtime::spawn_blocking(move || {

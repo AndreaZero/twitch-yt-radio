@@ -6,7 +6,7 @@ La chat è separata da MPV. Segue il canale Twitch in riproduzione e si scollega
 
 1. Apri **Impostazioni → Account Twitch** e il collegamento alla console sviluppatori.
 2. Registra un'app in [Twitch Developer Console](https://dev.twitch.tv/console/apps): tipo client **Public**, categoria applicazione desktop, redirect `http://localhost`. Il flusso device code non usa il redirect. Twitch può richiedere la verifica dell'account sviluppatore.
-3. Incolla il **Client ID**, non il Client Secret. Solo questo identificativo pubblico viene ricordato localmente.
+3. Incolla il **Client ID**, non il Client Secret. Questo identificativo pubblico viene ricordato nelle preferenze; la sessione OAuth viene salvata separatamente in Gestione credenziali Windows.
 4. Premi **Collega Twitch**, poi **Apri Twitch**. Verifica il codice nel browser e autorizza `user:read:chat` e `user:write:chat`. La password rimane nel sito Twitch.
 5. Avvia un canale Twitch: la chat compare sotto il player audio/video. Scrivi nel campo messaggio e premi Invia o Invio.
 
@@ -16,11 +16,15 @@ Gli accessi precedenti con sola lettura richiedono una nuova autorizzazione: **I
 
 Il cambio canale o account azzera la bozza. Un invio ancora in preparazione viene annullato se la sessione cambia; un messaggio già trasmesso a Twitch non può essere ritirato cambiando canale.
 
-I controlli sono nella stessa cornice del video, in una fascia riservata sotto l'immagine: l'host nativo MPV resta separato dalla webview e non copre i pulsanti. In fullscreen la chat è nascosta; nel player normale rimane sotto ai controlli.
+I controlli video sono in sovraimpressione: finestre trasparenti di proprietà del player sono posizionate sopra l'host MPV. Appaiono entrando o muovendo il mouse sul video e spariscono dopo 2 secondi di inattività; restano visibili finché il mouse è sui pulsanti. Non sottraggono altezza all'immagine. Il comportamento vale anche per YouTube e per video staccato/fullscreen. L'overlay è nascosto con il player o quando un'altra applicazione prende il primo piano.
+
+L'icona finestra nella testata della chat apre una finestra indipendente con lo stesso buffer, account e canale. Il player continua a selezionare il canale; la finestra chat non apre connessioni duplicate. Reinserisci o la X della finestra riportano la chat nel player. Il distacco non è ricordato al riavvio.
+
+La lista segue sempre l'ultimo messaggio in modalità live, anche dopo un ridimensionamento. L'hover sui messaggi congela le nuove righe per leggerle; lasciando la lista riprende il live se non hai scorrimento arretrato. Lo scroll verso l'alto mantiene la pausa. Scorrere in fondo o premere **Torna al live** riaggancia il flusso. Durante la pausa il buffer live continua a ricevere e le azioni di moderazione vengono applicate anche alle righe congelate. Ogni vista conserva al massimo 200 righe congelate oltre alle 200 live; una pausa lunga non è uno storico completo.
 
 ## Limiti
 
-- Token e refresh token vivono soltanto in memoria Rust. Riavviare l'app richiede un nuovo collegamento; nasconderla nella tray mantiene la sessione.
+- Access token e refresh token risiedono nel processo Rust e in Gestione credenziali Windows, con protezione del profilo Windows corrente; non sono in localStorage, file JSON o repository. Dopo il primo accesso con questa versione vengono ripristinati all'avvio, validati e rinnovati prima della scadenza. Scollega elimina la credenziale salvata e impedisce a un rinnovo già in corso di risalvarla. Revoca, scadenza del refresh token, errori dell'archivio Windows o rinnovi concorrenti da più istanze possono richiedere un nuovo accesso: usa una sola istanza dell'app.
 - La chat si connette anche con la relativa vista chiusa, quando account e canale sono disponibili. Conserva gli ultimi 200 messaggi in memoria.
 - Riceve nuovi messaggi dalla connessione in poi, senza storico o recupero di quelli persi durante una disconnessione.
 - Nomi, colori e testo; emote come testo. Badge, emote grafiche, notifiche abbonamenti e replay VOD non sono inclusi.
@@ -34,7 +38,7 @@ HTTPS e WebSocket sicuri sono gestiti in Rust. Il frontend non riceve token e no
 
 Verifiche della precedente versione in sola lettura, del 18 ottobre 2026: build frontend (`npm run build`), 10 test Rust (`cargo test --offline --manifest-path src-tauri/Cargo.toml --lib`) e compilazione dell'app debug completate su Windows. Ispezione dell'icona PNG completata. Verifica visiva della finestra bloccata dai permessi computer-use; anteprima browser non raggiungibile. Login e chat reali non eseguiti senza Client ID/autorizzazione.
 
-Le nuove modifiche (chat sotto il player, controlli integrati e invio) non sono state compilate né testate, su richiesta dell'utente. Verificare invio riuscito/rifiutato, nuova autorizzazione dei permessi e cambio canale durante un invio.
+Le modifiche a overlay, finestra chat, pausa/scorrimento e memorizzazione account non sono state compilate né testate, su richiesta dell'utente. Verificare overlay (hover, inattività, resize/DPI, fullscreen, distacco, Alt-Tab e tray), chat (lettura, moderazione, ritorno live e popout) e account (chiusura completa, riapertura, rinnovo, rete assente, Scollega e successivo riavvio).
 
 Compilazione e test locali non sostituiscono la prova con account reale. Servono un Client ID pubblico e l'autorizzazione dell'utente per verificare login, messaggi, cambio canale, stop, passaggio a YouTube, riconnessione di rete, scollegamento e moderazione.
 

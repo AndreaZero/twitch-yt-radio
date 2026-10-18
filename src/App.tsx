@@ -8,7 +8,7 @@ import { ChatPanel, TwitchSettings, useTwitchChat } from './TwitchChat';
 import { useVideoView, VideoSurface, VideoToolbar } from './VideoPanel';
 import type { PlaybackMode, Snapshot, EndEvent } from './player-types';
 import {
-  AlertCircle, AudioLines, Check, Headphones, Search, Minus,
+  AlertCircle, AudioLines, Check, Headphones, Search, Minus, MessageCircle,
   ListMusic, LoaderCircle, Pause, Play, ArrowUpRight, RotateCcw,
   Settings2, SkipBack, SkipForward, Square, Trash2, Volume2, VolumeX,
   Video, X,
@@ -89,12 +89,30 @@ export default function App() {
   const pendingStopRef = useRef<Snapshot | null>(null);
   const handleEndedRef = useRef<(event: EndEvent) => void>(() => {});
   const playRef = useRef<(track: Track) => Promise<void>>(async () => {});
+  const controlActionRef = useRef<(action: string) => void>(() => {});
 
   useEffect(() => { tracksRef.current = tracks; localStorage.setItem(STORAGE_KEY, JSON.stringify(tracks)); }, [tracks]);
   useEffect(() => { currentIdRef.current = currentId; }, [currentId]);
   useEffect(() => { localStorage.setItem(VOLUME_KEY, String(volume)); }, [volume]);
   useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
   useEffect(() => { if (videoView.fullscreen && !videoView.detached) setTab('player'); }, [videoView.fullscreen, videoView.detached]);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    const cleanup: (() => void)[] = [];
+    const register = async () => {
+      for (const subscription of [
+        listen<string>('player-control-request', event => controlActionRef.current(event.payload)),
+        listen<string>('player-control-error', event => setError(event.payload)),
+        listen('open-twitch-settings', () => setTab('settings')),
+      ]) {
+        const stop = await subscription;
+        if (disposed) stop(); else cleanup.push(stop);
+      }
+    };
+    void register().catch(e => { if (!disposed) setError(messageOf(e)); });
+    return () => { disposed = true; cleanup.forEach(stop => stop()); };
+  }, []);
 
   const refreshDependencies = async () => {
     try { setDependencies(await invoke<Dependencies>('check_dependencies')); }
@@ -285,6 +303,11 @@ export default function App() {
     try { await invoke('set_volume', { volume: nextVolume }); }
     catch (e) { if (isActive) setError(messageOf(e)); }
   };
+  controlActionRef.current = action => {
+    if (action === 'previous') void jump(-1);
+    else if (action === 'next') void jump(1);
+    else if (action === 'audio') void changeMode('audio_only');
+  };
 
   const current = tracks.find(item => item.id === currentId) ?? activeTrackRef.current;
   const channel = isActive && current?.platform === 'twitch' ? new URL(current.url).pathname.split('/').filter(Boolean)[0] ?? null : null;
@@ -348,7 +371,7 @@ export default function App() {
       {error && <div className="error-message" role="alert"><AlertCircle size={15}/><span>{error}</span><button aria-label="Chiudi errore" onClick={() => setError('')}><X size={14}/></button></div>}
       {missingDeps && <button className="warning" onClick={() => setTab('settings')}><AlertCircle size={14}/> Componenti mancanti · Apri impostazioni <ArrowUpRight size={14}/></button>}
       <div className="content">
-        <section className={`player-page ${channel ? 'with-chat' : ''}`} hidden={tab !== 'player'} aria-label="Player">
+        <section className={`player-page ${channel && !chat.state.detached ? 'with-chat' : ''}`} hidden={tab !== 'player'} aria-label="Player">
           <div className={`media-player ${mode === 'video_audio' ? 'media-video' : 'media-audio'}`}>
           <div className={`player-stage ${mode === 'video_audio' ? 'player-video' : ''}`}>
           {mode === 'video_audio' ? <VideoSurface view={videoView} onError={setError}/> :
@@ -359,9 +382,9 @@ export default function App() {
             </div>}
           {!current && <div className="stage-caption">Incolla un link o scrivi un canale Twitch.</div>}
           </div>
-          {playbackControls}
+          {(mode !== 'video_audio' || !videoView.enabled || videoView.detached) && playbackControls}
           </div>
-          {channel && <ChatPanel key={channel} channel={channel} chat={chat} onSettings={() => setTab('settings')}/>}
+          {channel && (chat.state.detached ? <button className="chat-window-link text-button" onClick={() => void chat.command('chat_set_detached', { detached: false })}><MessageCircle size={14}/> Chat in finestra · Reinserisci</button> : <ChatPanel key={channel} channel={channel} chat={chat} onSettings={() => setTab('settings')}/>)}
         </section>
         {tab === 'library' && <section className="library-panel">
           <div className="panel-heading"><h1>Libreria <span className="count">{tracks.length}</span></h1></div>

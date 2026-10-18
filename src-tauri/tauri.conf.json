@@ -25,6 +25,16 @@
         "resizable": true
       },
       {
+        "label": "chat",
+        "title": "Background Audio - Chat Twitch",
+        "width": 380,
+        "height": 580,
+        "minWidth": 330,
+        "minHeight": 280,
+        "visible": false,
+        "resizable": true
+      },
+      {
         "label": "video",
         "title": "Background Audio - Video",
         "width": 400,

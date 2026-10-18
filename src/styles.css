@@ -183,3 +183,24 @@ details { margin-top:7px; }
 .video-fullscreen .player-controls { padding:5px 14px; }
 .detached-player > .media-player { border:0; border-radius:0; }
 @media (max-height:450px) { .player-page { padding:8px; gap:7px; } .with-chat .media-player { min-height:178px; } .media-player .player-controls { margin:0; padding:6px 10px 4px; } .media-player .controls-row { margin-top:4px; } .with-chat .audio-visual { display:none; } }
+/* Overlay windows are owned by their player, above its native MPV window. */
+html[data-surface="video-controls"],html[data-surface="video-controls"] body,html[data-surface="video-controls"] #root { background:transparent; min-width:0; margin:0; overflow:hidden; }
+.video-overlay { height:100dvh; padding:4px; display:flex; flex-direction:column; justify-content:flex-end; background:transparent; }
+.overlay-controls { display:flex; gap:2px; align-items:center; padding:6px 7px; min-height:43px; border:1px solid #ffffff2b; border-radius:13px; background:linear-gradient(135deg,#222431ed,#10121bef); box-shadow:inset 0 1px 0 #ffffff13; }
+.overlay-controls .icon-button { width:27px; height:28px; color:#e0daee; }
+.overlay-controls .overlay-play { background:#d2cafa22; }
+.overlay-controls input { flex:1; min-width:28px; width:70px; height:3px; accent-color:#d2cafa; cursor:pointer; }
+.overlay-controls .video-toolbar .icon-button { width:27px; }
+.overlay-error { color:#ffd0d8; background:#251720e8; font-size:9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:2px 7px; border-radius:5px; }
+.with-chat .media-video { flex:0 0 42%; min-height:100px; max-height:320px; }
+.detached-chat { display:flex; flex-direction:column; height:100dvh; min-height:0; padding:4px; background:radial-gradient(ellipse at 0 0,#a0a8de14,transparent 65%),#171b27; }
+.detached-chat .chat-panel { flex:1; min-height:0; padding:10px 12px; overflow:hidden; }
+.chat-actions { display:flex; align-items:center; gap:1px; }
+.chat-window-link { align-self:flex-end; flex-shrink:0; font-size:10px; padding:6px 9px; }
+.chat-messages { overflow-anchor:none; scroll-behavior:auto; overscroll-behavior:contain; }
+.chat-messages:focus-visible { outline:1px solid #c8bbf566; outline-offset:-1px; }
+.follow-chat { font-size:10px; padding:6px 9px; flex-shrink:0; background:#272339; color:#e0d8ff; margin:4px 0 0; }
+@media (max-height:450px) { .with-chat .media-video { min-height:90px; flex-basis:38%; } }
+.video-fullscreen .player-page .media-video { flex:1; min-height:0; max-height:none; }
+.chat-panel { position:relative; }
+.follow-chat { position:absolute; z-index:2; bottom:65px; left:50%; transform:translateX(-50%); margin:0; max-width:calc(100% - 12px); white-space:nowrap; box-shadow:0 3px 14px #00000040; }

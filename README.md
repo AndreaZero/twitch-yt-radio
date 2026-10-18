@@ -10,9 +10,11 @@ The current application is displayed as **Background Audio**. The interface and 
 
 ## Features
 
-- Dark glass player with a channel/link bar and separate Player, Library and Settings views. Controls share the audio/video frame; Twitch chat appears below the player.
+- Dark glass player with a channel/link bar and separate Player, Library and Settings views. Video controls overlay the picture on mouse movement and hide after 2 seconds of inactivity; Twitch chat appears below the player.
 - Add individual YouTube videos or live Twitch channels to a local queue, including by Twitch channel name.
 - Live Twitch chat with reading and sending from your account, using browser device-code login. Requires a public Twitch application's Client ID: [setup and limitations](docs/TWITCH-CHAT.en.md).
+- Detachable chat window with live scrolling, hover and reading pauses. Windows Credential Manager remembers Twitch and protects token renewal.
+- [YouTube chat assessment](docs/YOUTUBE-CHAT.it.md) (Italian): separate integration, not implemented yet.
 - Choose **Solo audio** (default) or **Video + audio** in the widget. The choice is saved locally.
 - In audio mode, YouTube requests `bestaudio`; Twitch requests Streamlink's `audio_only` and reports an error when unavailable, without video fallback.
 - Video mode displays MPV **inside the widget by default**, with an initial 450 × 540 window and compact controls. The glass uses Windows Acrylic and depends on system transparency settings.

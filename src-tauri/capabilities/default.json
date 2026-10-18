@@ -1,6 +1,6 @@
 {
   "identifier": "default",
   "description": "Permessi minimi dell'interfaccia del player",
-  "windows": ["main", "video"],
+  "windows": ["main", "video", "chat", "controls-main", "controls-video"],
   "permissions": ["core:default", "core:window:allow-start-dragging", "core:window:allow-minimize", "core:window:allow-close"]
 }

@@ -10,6 +10,8 @@
 | `src/TwitchChat.tsx` | Stato e viste chat, accesso tramite device code e configurazione account. |
 | `src-tauri/src/chat.rs` | OAuth Twitch, token in memoria, EventSub, buffer e moderazione; invio Helix validato per canale/account correnti e gestione rifiuti Twitch. |
 | `src/VideoPanel.tsx` | Misurazione area video, controlli visualizzazione, UI staccata e controlli riproduzione sincronizzati. |
+| `src/VideoControls.tsx` / `src-tauri/src/video_overlay.rs` | Sovraimpressione tramite finestre trasparenti owned, hover sul video nativo, timeout e sincronizzazione comandi. |
+| `src-tauri/src/token_store.rs` | Credenziali Windows, ripristino sessione e protezione contro risalvataggi dopo logout. |
 | `src/styles.css` | Layout desktop compatto. |
 | `src-tauri/src/lib.rs` | Comandi Rust validati, ciclo dei processi, risoluzione Twitch, IPC MPV, tray. |
 | `src-tauri/src/playback.rs` | Modalità validate e opzioni per formati/input. |
@@ -36,6 +38,10 @@ Il cambio modalità riapre l'URL corrente con lo stesso comando di avvio, azzera
 Pausa, volume, avvio e stop emettono snapshot registrati per sincronizzare i controlli delle due webview. Non c'è conferma dello stato tramite IPC MPV bidirezionale: pausa e volume riflettono ancora il comando registrato localmente. L'app non rileva attualmente buffering o audio effettivamente udibile.
 
 ## Stato e ciclo di vita
+
+La chat può usare una finestra indipendente che osserva lo stesso stato Rust: soltanto il player principale sceglie il canale. Le credenziali OAuth sono protette da Gestione credenziali Windows; `chat.rs` valida/rinnova e `token_store.rs` salva ogni rotazione del refresh token. Nessun token raggiunge React.
+
+Le finestre `controls-main` e `controls-video` vengono create al primo uso del video, con owner nativo rispettivamente `main` e `video`. Non sono finestre globalmente always-on-top. Un controllo locale del puntatore sul thread UI mostra la barra solo sul video visibile e in primo piano; drag dei controlli, ridimensionamento, distacco e fullscreen condividono le coordinate fisiche dell'host. Il frontend dell'overlay invoca i comandi Rust già validati; cambio sorgente/modalità passa al player principale per conservarne la generazione. La barra non occupa spazio nel layout della chat.
 
 - Rust possiede il processo MPV in `Arc<Mutex<Player>>`.
 - Playlist, volume e modalità preferita risiedono in `localStorage` WebView2; nessuna sincronizzazione cloud. Dopo un reload UI prevale lo snapshot del motore attivo.

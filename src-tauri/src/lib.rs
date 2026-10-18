@@ -2,6 +2,8 @@ mod chat;
 mod dependencies;
 mod playback;
 mod video_host;
+mod video_overlay;
+mod token_store;
 use playback::PlaybackMode;
 use serde::Serialize;
 use std::{
@@ -458,6 +460,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             check_dependencies,
             chat::chat_get_state,
+            chat::chat_set_detached,
+            chat::chat_open_settings,
             chat::chat_login,
             chat::chat_logout,
             chat::chat_watch,
@@ -470,12 +474,14 @@ pub fn run() {
             set_paused,
             set_volume,
             get_playback_state,
+            video_overlay::set_video_overlay_interacting,
             video_host::get_video_view,
             video_host::update_video_bounds,
             video_host::set_video_detached,
             video_host::set_video_fullscreen
         ])
         .setup(|app| {
+            chat::restore(app.handle());
             let show = MenuItem::with_id(app, "show", "Apri player", true, None::<&str>)?;
             let hide = MenuItem::with_id(app, "hide", "Nascondi", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
@@ -519,6 +525,10 @@ pub fn run() {
                 if window.label() == "video" {
                     if let Err(error) = video_host::close_detached(window.app_handle()) {
                         let _ = window.emit("video-view-error", error);
+                    }
+                } else if window.label() == "chat" {
+                    if let Err(error) = chat::close_detached(window.app_handle()) {
+                        let _ = window.emit("chat-window-error", error);
                     }
                 } else {
                     let _ = window.hide();
