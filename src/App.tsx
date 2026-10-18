@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '@tauri-apps/api/core';
 import { ChatPanel, TwitchSettings, useTwitchChat } from './TwitchChat';
+import { YoutubePanel, YoutubeSettings, useYoutubeChat } from './YoutubeChat';
 import { useVideoView, VideoSurface, VideoToolbar } from './VideoPanel';
 import type { PlaybackMode, Snapshot, EndEvent } from './player-types';
 import {
@@ -312,6 +313,8 @@ export default function App() {
   const current = tracks.find(item => item.id === currentId) ?? activeTrackRef.current;
   const channel = isActive && current?.platform === 'twitch' ? new URL(current.url).pathname.split('/').filter(Boolean)[0] ?? null : null;
   const chat = useTwitchChat(channel);
+  const youtubeUrl = isActive && current?.platform === 'youtube' ? current.url : null;
+  const youtubeChat = useYoutubeChat(youtubeUrl);
   const at = tracks.findIndex(item => item.id === currentId);
   const hasPrev = at > 0 && !busy;
   const hasNext = ((at >= 0 && at < tracks.length - 1) || (at === -1 && tracks.length > 0)) && !busy;
@@ -371,7 +374,7 @@ export default function App() {
       {error && <div className="error-message" role="alert"><AlertCircle size={15}/><span>{error}</span><button aria-label="Chiudi errore" onClick={() => setError('')}><X size={14}/></button></div>}
       {missingDeps && <button className="warning" onClick={() => setTab('settings')}><AlertCircle size={14}/> Componenti mancanti · Apri impostazioni <ArrowUpRight size={14}/></button>}
       <div className="content">
-        <section className={`player-page ${channel && !chat.state.detached ? 'with-chat' : ''}`} hidden={tab !== 'player'} aria-label="Player">
+        <section className={`player-page ${(channel && !chat.state.detached) || (youtubeUrl && !youtubeChat.state.detached) ? 'with-chat' : ''}`} hidden={tab !== 'player'} aria-label="Player">
           <div className={`media-player ${mode === 'video_audio' ? 'media-video' : 'media-audio'}`}>
           <div className={`player-stage ${mode === 'video_audio' ? 'player-video' : ''}`}>
           {mode === 'video_audio' ? <VideoSurface view={videoView} onError={setError}/> :
@@ -385,6 +388,7 @@ export default function App() {
           {(mode !== 'video_audio' || !videoView.enabled || videoView.detached) && playbackControls}
           </div>
           {channel && (chat.state.detached ? <button className="chat-window-link text-button" onClick={() => void chat.command('chat_set_detached', { detached: false })}><MessageCircle size={14}/> Chat in finestra · Reinserisci</button> : <ChatPanel key={channel} channel={channel} chat={chat} onSettings={() => setTab('settings')}/>)}
+          {youtubeUrl && (youtubeChat.state.detached ? <button className="chat-window-link text-button" onClick={() => void youtubeChat.command('youtube_set_detached', { detached: false })}><MessageCircle size={14}/> YouTube in finestra · Reinserisci</button> : <YoutubePanel key={youtubeUrl} chat={youtubeChat} onSettings={() => setTab('settings')}/>)}
         </section>
         {tab === 'library' && <section className="library-panel">
           <div className="panel-heading"><h1>Libreria <span className="count">{tracks.length}</span></h1></div>
@@ -403,6 +407,7 @@ export default function App() {
         {tab === 'settings' && <section className="settings-panel">
           <div className="panel-heading"><h1>Impostazioni</h1></div>
           <TwitchSettings chat={chat}/>
+          <YoutubeSettings chat={youtubeChat}/>
           <section className="settings-group">
             <h2>Motore di riproduzione <button className="icon-button" title="Aggiorna diagnostica" aria-label="Aggiorna diagnostica" onClick={() => void refreshDependencies()}><RotateCcw size={14}/></button></h2>
             <div className="deps">{([['MPV', 'mpv'], ['yt-dlp', 'ytDlp'], ['Streamlink', 'streamlink']] as const).map(([name, key]) => <div className="dep" key={name}><span>{name}</span><span className={dependencies?.[key] ? 'dep-ok' : 'dep-bad'}>{dependencies?.[key] ? <><Check size={13}/> Disponibile</> : <><AlertCircle size={13}/> Non rilevato</>}</span></div>)}</div>

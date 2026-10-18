@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { ArrowDownLeft, ExternalLink, LogOut, MessageCircle, RotateCcw, Send, Twitch } from 'lucide-react';
+import { ArrowDownLeft, ExternalLink, LogOut, MessageCircle, RotateCcw, Send, Twitch, Youtube } from 'lucide-react';
 
-type ChatMessage = { id: string; userId: string; name: string; text: string; color: string };
-type ChatState = {
+export type ChatMessage = { id: string; userId: string; name: string; text: string; color: string };
+export type ChatState = {
   version: number; login: string | null; canSend: boolean; detached: boolean; channel: string | null; status: string; error: string;
   userCode: string | null; verificationUri: string | null; messages: ChatMessage[];
   moderation?: ChatDelta[];
@@ -73,8 +73,11 @@ export function useTwitchChat(channel?: string | null) {
 }
 export type TwitchChat = ReturnType<typeof useTwitchChat>;
 
-export function ChatPanel({ chat, channel, onSettings }: { chat: TwitchChat; channel: string; onSettings: () => void }) {
+export function ChatPanel({ chat, channel, onSettings, provider = 'twitch' }: { chat: TwitchChat; channel: string; onSettings: () => void; provider?: 'twitch' | 'youtube' }) {
   const { state } = chat;
+  const youtube = provider === 'youtube';
+  const service = youtube ? 'Google' : 'Twitch';
+  const prefix = youtube ? 'youtube' : 'chat';
   const matchesChannel = state.channel === channel;
   const messages = matchesChannel ? state.messages : [];
   const ready = matchesChannel && state.status === 'In diretta';
@@ -159,14 +162,14 @@ export function ChatPanel({ chat, channel, onSettings }: { chat: TwitchChat; cha
     requestAnimationFrame(() => { if (list.current) list.current.scrollTop = list.current.scrollHeight; });
   };
   const unseen = messages.filter(message => !displayed.some(row => row.id === message.id)).length;
-  return <section className="chat-panel" aria-label="Chat Twitch">
-    <div className="panel-heading"><h1><Twitch size={15}/>{`#${channel}`}</h1>
-      <div className="chat-actions"><button className="icon-button" title={state.detached ? 'Reinserisci chat nel player' : 'Apri chat in finestra'} aria-label={state.detached ? 'Reinserisci chat nel player' : 'Apri chat in finestra'} onClick={() => void chat.command('chat_set_detached', { detached: !state.detached })}>{state.detached ? <ArrowDownLeft size={16}/> : <ExternalLink size={16}/>}</button>
-      <button className="icon-button" title="Riconnetti chat" aria-label="Riconnetti chat" disabled={!state.login || !state.channel} onClick={() => void chat.command('chat_retry')}><RotateCcw size={16}/></button></div>
+  return <section className="chat-panel" aria-label={youtube ? 'Chat YouTube' : 'Chat Twitch'}>
+    <div className="panel-heading"><h1>{youtube ? <Youtube size={15}/> : <Twitch size={15}/>} {youtube ? 'YouTube · chat live' : `#${channel}`}</h1>
+      <div className="chat-actions"><button className="icon-button" title={state.detached ? 'Reinserisci chat nel player' : 'Apri chat in finestra'} aria-label={state.detached ? 'Reinserisci chat nel player' : 'Apri chat in finestra'} onClick={() => void chat.command(`${prefix}_set_detached`, { detached: !state.detached })}>{state.detached ? <ArrowDownLeft size={16}/> : <ExternalLink size={16}/>}</button>
+      <button className="icon-button" title="Riconnetti chat" aria-label="Riconnetti chat" disabled={!state.login || !state.channel} onClick={() => void chat.command(`${prefix}_retry`)}><RotateCcw size={16}/></button></div>
     </div>
     <p className="panel-caption" role="status"><span className={`status-dot ${ready ? 'dot-live' : ''}`}/>{matchesChannel ? state.status : 'Connessione chat…'}</p>
     {matchesChannel && (state.error || chat.error) && <p className="inline-error" role="alert">{state.error || chat.error}</p>}
-    {!state.login ? <div className="empty-state"><MessageCircle size={28}/><p>La chat, accanto al tuo ascolto.</p><button className="text-button" onClick={onSettings}>Collega il tuo account Twitch</button></div> :
+    {!state.login ? <div className="empty-state"><MessageCircle size={28}/><p>La chat, accanto al tuo ascolto.</p><button className="text-button" onClick={onSettings}>Collega il tuo account {service}</button></div> :
       <div className="chat-messages" ref={list} role="log" aria-label="Messaggi in diretta" aria-live="off" tabIndex={0}
       onPointerEnter={event => { if (event.pointerType === 'mouse') setHovered(true); }}
       onPointerLeave={() => { setHovered(false); setHoverOverride(false); userScroll.current = false; }}
@@ -189,12 +192,12 @@ export function ChatPanel({ chat, channel, onSettings }: { chat: TwitchChat; cha
     {state.login && <>
       {!state.canSend && <button className="text-button chat-upgrade" onClick={onSettings}>Autorizza l’invio nelle impostazioni</button>}
       <form className="chat-composer" onSubmit={event => { event.preventDefault(); void submit(); }}>
-        <input aria-label={`Messaggio a #${channel}`} value={draft} maxLength={500} disabled={!ready || !state.canSend} placeholder={state.canSend ? `Scrivi come ${state.login}…` : 'Ricollega Twitch per scrivere…'} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault(); }}/>
+        <input aria-label={youtube ? 'Messaggio alla chat YouTube' : `Messaggio a #${channel}`} value={draft} maxLength={youtube ? 200 : 500} disabled={!ready || !state.canSend} placeholder={state.canSend ? `Scrivi come ${state.login}…` : `Ricollega ${service} per scrivere…`} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault(); }}/>
         <button className="icon-button" type="submit" disabled={!ready || !state.canSend || sending || !draft.trim()} aria-label="Invia messaggio" title="Invia messaggio"><Send size={16}/></button>
       </form>
       {sendError && <p className="inline-error send-error" role="alert">{sendError}</p>}
     </>}
-    <div className="chat-footnote">Ultimi 200 messaggi · la chat può anticipare l’audio</div>
+    <div className="chat-footnote">Ultimi 200 messaggi · {youtube ? 'aggiornamenti secondo i tempi YouTube' : 'la chat può anticipare l’audio'}</div>
   </section>;
 }
 

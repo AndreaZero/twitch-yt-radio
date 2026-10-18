@@ -1,9 +1,10 @@
 mod chat;
 mod dependencies;
 mod playback;
+mod token_store;
 mod video_host;
 mod video_overlay;
-mod token_store;
+mod youtube;
 use playback::PlaybackMode;
 use serde::Serialize;
 use std::{
@@ -452,6 +453,7 @@ fn emit_playback_state(app: &AppHandle, shared: &SharedPlayer) {
 pub fn run() {
     tauri::Builder::default()
         .manage(chat::SharedChat::default())
+        .manage(youtube::SharedYoutube::default())
         .manage(video_host::SharedVideoHost::default())
         .manage(Arc::new(Mutex::new(Player {
             volume: 70,
@@ -469,6 +471,15 @@ pub fn run() {
             chat::chat_send_message,
             chat::chat_open_activation,
             chat::chat_open_developer_console,
+            youtube::youtube_get_state,
+            youtube::youtube_login,
+            youtube::youtube_logout,
+            youtube::youtube_watch,
+            youtube::youtube_retry,
+            youtube::youtube_more_comments,
+            youtube::youtube_send_message,
+            youtube::youtube_set_detached,
+            youtube::youtube_open_console,
             start_playback,
             stop_playback,
             set_paused,
@@ -482,6 +493,7 @@ pub fn run() {
         ])
         .setup(|app| {
             chat::restore(app.handle());
+            youtube::restore(app.handle());
             let show = MenuItem::with_id(app, "show", "Apri player", true, None::<&str>)?;
             let hide = MenuItem::with_id(app, "hide", "Nascondi", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
@@ -525,6 +537,10 @@ pub fn run() {
                 if window.label() == "video" {
                     if let Err(error) = video_host::close_detached(window.app_handle()) {
                         let _ = window.emit("video-view-error", error);
+                    }
+                } else if window.label() == "youtube-chat" {
+                    if let Err(error) = youtube::close_detached(window.app_handle()) {
+                        let _ = window.emit("youtube-window-error", error);
                     }
                 } else if window.label() == "chat" {
                     if let Err(error) = chat::close_detached(window.app_handle()) {

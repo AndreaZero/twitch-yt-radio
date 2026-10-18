@@ -8,6 +8,7 @@
 | --- | --- |
 | `src/App.tsx` | React UI, URL entry, queue, local persistence, dependency diagnostics, playback events. |
 | `src/TwitchChat.tsx` | Chat state and views, device-code login and account setup. |
+| `src/YoutubeChat.tsx` / `src-tauri/src/youtube.rs` | YouTube live chat and video comments; desktop PKCE OAuth, Google renewal, API-paced polling, pagination and validated writes. Reuses the Twitch live list. |
 | `src-tauri/src/chat.rs` | Twitch OAuth, in-memory tokens, EventSub, bounded history and moderation; validated Helix sending for the current channel/account and Twitch rejection handling. |
 | `src/VideoPanel.tsx` | Video placeholder measurement, view controls, detached window UI and synchronized playback controls. |
 | `src/VideoControls.tsx` / `src-tauri/src/video_overlay.rs` | Owned transparent control windows, native video hover/timeout and synchronized commands. |

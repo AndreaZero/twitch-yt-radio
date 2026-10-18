@@ -35,6 +35,16 @@
         "resizable": true
       },
       {
+        "label": "youtube-chat",
+        "title": "Background Audio - YouTube",
+        "width": 380,
+        "height": 580,
+        "minWidth": 330,
+        "minHeight": 280,
+        "visible": false,
+        "resizable": true
+      },
+      {
         "label": "video",
         "title": "Background Audio - Video",
         "width": 400,

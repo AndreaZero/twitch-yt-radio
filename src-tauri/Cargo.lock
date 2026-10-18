@@ -86,10 +86,13 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 name = "background-audio"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
+ "rand 0.9.5",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tokio",

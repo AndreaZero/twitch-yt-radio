@@ -204,3 +204,12 @@ html[data-surface="video-controls"],html[data-surface="video-controls"] body,htm
 .video-fullscreen .player-page .media-video { flex:1; min-height:0; max-height:none; }
 .chat-panel { position:relative; }
 .follow-chat { position:absolute; z-index:2; bottom:65px; left:50%; transform:translateX(-50%); margin:0; max-width:calc(100% - 12px); white-space:nowrap; box-shadow:0 3px 14px #00000040; }
+.video-comment { padding:8px 0; border-bottom:1px solid var(--line); }
+.comment-meta { display:flex; align-items:baseline; gap:8px; font-size:11px; }
+.comment-meta strong { color:#d2cafa; overflow-wrap:anywhere; }
+.comment-meta time,.video-comment small { font-size:9px; color:var(--muted); }
+.video-comment p { margin:4px 0; font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
+.comment-composer { display:flex; flex-direction:column; gap:5px; flex-shrink:0; padding-top:7px; }
+.comment-composer textarea { width:100%; min-height:42px; max-height:110px; resize:vertical; border:1px solid #ffffff20; border-radius:10px; background:#ffffff06; padding:7px 10px; font:inherit; font-size:12px; color:inherit; }
+.comment-composer .text-button { align-self:flex-end; padding:5px 9px; }
+.load-comments { margin:8px 0; }

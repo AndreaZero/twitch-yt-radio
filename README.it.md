@@ -14,7 +14,7 @@ L'applicazione attuale si presenta come **Background Audio**. Interfaccia ed err
 - Aggiunta di singoli video YouTube o canali Twitch live a una playlist locale, anche scrivendo soltanto il nome del canale Twitch.
 - Chat Twitch live con lettura e invio messaggi dal proprio account, accesso tramite codice nel browser. Richiede il Client ID di un'app Twitch pubblica: [configurazione e limiti](docs/TWITCH-CHAT.it.md).
 - Chat staccabile in finestra; scorrimento live con pausa in hover o durante la lettura. Account Twitch ricordato tramite Gestione credenziali Windows e rinnovo dei token.
-- [Valutazione della chat YouTube](docs/YOUTUBE-CHAT.it.md): integrazione separata, non ancora implementata.
+- YouTube: chat delle dirette con lettura/invio e stessa pausa di lettura di Twitch; commenti dei video normali con paginazione e pubblicazione. Finestra separata e account Google ricordato in Windows. Richiede un client OAuth desktop Google Cloud: [configurazione e limiti](docs/YOUTUBE-CHAT.it.md).
 - Scelta **Solo audio** (predefinita) o **Video + audio** nel widget, salvata localmente.
 - In modalità audio, YouTube richiede `bestaudio`; Twitch richiede `audio_only` a Streamlink e segnala un errore se non disponibile, senza fallback video.
 - La modalità video mostra MPV **dentro il widget per impostazione predefinita**, con finestra iniziale 450 × 540 e controlli compatti. Il vetro usa Acrylic Windows e dipende dalle impostazioni di trasparenza del sistema.

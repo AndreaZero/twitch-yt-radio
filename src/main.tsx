@@ -5,6 +5,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { DetachedPlayer } from './VideoPanel';
 import { DetachedChat } from './TwitchChat';
+import { DetachedYoutubeChat } from './YoutubeChat';
 import { VideoControls } from './VideoControls';
 import './styles.css';
 
@@ -13,6 +14,6 @@ document.documentElement.dataset.surface = windowLabel.startsWith('controls-') ?
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {windowLabel.startsWith('controls-') ? <VideoControls/> : windowLabel === 'video' ? <DetachedPlayer/> : windowLabel === 'chat' ? <DetachedChat/> : <App/>}
+    {windowLabel.startsWith('controls-') ? <VideoControls/> : windowLabel === 'video' ? <DetachedPlayer/> : windowLabel === 'chat' ? <DetachedChat/> : windowLabel === 'youtube-chat' ? <DetachedYoutubeChat/> : <App/>}
   </React.StrictMode>,
 );
