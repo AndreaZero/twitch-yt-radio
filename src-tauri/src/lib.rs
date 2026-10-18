@@ -1,5 +1,6 @@
 mod dependencies;
 mod playback;
+mod video_host;
 use playback::PlaybackMode;
 use serde::Serialize;
 use std::{
@@ -37,10 +38,9 @@ type SharedPlayer = Arc<Mutex<Player>>;
 struct EndEvent {
     generation: u64,
     failed: bool,
-    stopped: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct Snapshot {
     active: bool,
@@ -159,31 +159,32 @@ fn monitor(shared: SharedPlayer, app: AppHandle, generation: u64) {
             match player.child.as_mut() {
                 Some(child) => match child.try_wait() {
                     Ok(Some(status)) => {
-                        let stopped = playback::manually_closed(player.mode, status.code());
                         player.child.take();
                         player.current_url = None;
                         player.paused = false;
-                        Some((!status.success() && !stopped, stopped))
+                        Some(!status.success())
                     }
                     Ok(None) => None,
                     Err(_) => {
                         player.child.take();
                         player.current_url = None;
-                        Some((true, false))
+                        Some(true)
                     }
                 },
                 None => return,
             }
         };
-        if let Some((failed, stopped)) = ended {
-            let _ = app.emit(
-                "playback-ended",
-                EndEvent {
-                    generation,
-                    failed,
-                    stopped,
-                },
-            );
+        if let Some(failed) = ended {
+            // Recheck on the UI thread: a new generation may already have started.
+            let shared = shared.clone();
+            let _ = video_host::on_ui(&app, move |app| {
+                let current = shared.lock().map_err(|_| "Player non disponibile")?;
+                if current.generation == generation && current.child.is_none() {
+                    video_host::set_enabled_on_ui(app, false, false)?;
+                }
+                Ok(())
+            });
+            let _ = app.emit("playback-ended", EndEvent { generation, failed });
             return;
         }
     });
@@ -193,6 +194,7 @@ fn do_start(
     url: String,
     volume: u8,
     mode: PlaybackMode,
+    expected_generation: u64,
     shared: SharedPlayer,
     app: AppHandle,
 ) -> Result<u64, String> {
@@ -207,24 +209,17 @@ fn do_start(
         Source::Youtube => url.clone(),
         Source::Twitch => resolve_twitch(&url, mode)?,
     };
-    let video_input = if mode == PlaybackMode::VideoAudio {
-        let directory = app
-            .path()
-            .app_cache_dir()
-            .map_err(|e| format!("Cartella cache non disponibile: {e}"))?;
-        std::fs::create_dir_all(&directory)
-            .map_err(|e| format!("Impossibile creare la cache video: {e}"))?;
-        let path = directory.join("video-input.conf");
-        // Only this fixed binding is loaded; controls remain in the widget.
-        std::fs::write(&path, playback::VIDEO_INPUT)
-            .map_err(|e| format!("Impossibile configurare la finestra video: {e}"))?;
-        Some(path)
+    let video_handle = if mode == PlaybackMode::VideoAudio {
+        Some(video_host::prepare(&app)?)
     } else {
         None
     };
     let mut player = shared
         .lock()
         .map_err(|_| "Player non disponibile".to_string())?;
+    if player.generation != expected_generation {
+        return Err("Avvio annullato: riproduzione cambiata o arrestata".into());
+    }
     let generation = player.generation.wrapping_add(1);
     let pipe_name = format!("background_audio_{}_{}", std::process::id(), generation);
     let pipe_path = format!(r"\\.\pipe\{}", pipe_name);
@@ -239,8 +234,8 @@ fn do_start(
         "--volume-max=100",
     ]);
     command.args(mode.window_args());
-    if let Some(path) = video_input {
-        command.arg(format!("--input-conf={}", path.display()));
+    if let Some(handle) = video_handle {
+        command.arg(format!("--wid={handle}"));
     }
     command.arg(format!("--volume={clamped_volume}"));
     command.arg(format!("--input-ipc-server={pipe_path}"));
@@ -269,6 +264,39 @@ fn do_start(
     player.paused = false;
     player.mode = mode;
     drop(player);
+    let shared_for_view = shared.clone();
+    if let Err(error) = video_host::on_ui(&app, move |app| {
+        let player = shared_for_view
+            .lock()
+            .map_err(|_| "Player non disponibile")?;
+        if player.generation != generation || player.child.is_none() {
+            return Err("Avvio annullato: riproduzione cambiata o arrestata".into());
+        }
+        video_host::set_enabled_on_ui(
+            app,
+            mode == PlaybackMode::VideoAudio,
+            mode == PlaybackMode::AudioOnly,
+        )
+    }) {
+        if let Ok(mut player) = shared.lock() {
+            if player.generation == generation {
+                kill_current(&mut player);
+            }
+        }
+        let shared_for_cleanup = shared.clone();
+        let _ = video_host::on_ui(&app, move |app| {
+            let player = shared_for_cleanup
+                .lock()
+                .map_err(|_| "Player non disponibile")?;
+            if player.generation == generation && player.child.is_none() {
+                video_host::set_enabled_on_ui(app, false, true)?;
+            }
+            Ok(())
+        });
+        emit_playback_state(&app, &shared);
+        return Err(error);
+    }
+    emit_playback_state(&app, &shared);
     monitor(shared, app, generation);
     Ok(generation)
 }
@@ -282,21 +310,40 @@ async fn start_playback(
     state: State<'_, SharedPlayer>,
 ) -> Result<u64, String> {
     let shared = state.inner().clone();
+    let expected_generation = shared
+        .lock()
+        .map_err(|_| "Player non disponibile")?
+        .generation;
     tauri::async_runtime::spawn_blocking(move || {
-        do_start(url, volume, mode.unwrap_or_default(), shared, app)
+        do_start(
+            url,
+            volume,
+            mode.unwrap_or_default(),
+            expected_generation,
+            shared,
+            app,
+        )
     })
     .await
     .map_err(|e| format!("Errore interno: {e}"))?
 }
 
 #[tauri::command]
-fn stop_playback(state: State<'_, SharedPlayer>) -> Result<(), String> {
-    let mut player = state
-        .lock()
-        .map_err(|_| "Player non disponibile".to_string())?;
-    player.generation = player.generation.wrapping_add(1);
-    kill_current(&mut player);
-    Ok(())
+async fn stop_playback(app: AppHandle, state: State<'_, SharedPlayer>) -> Result<(), String> {
+    let shared = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut player = shared
+            .lock()
+            .map_err(|_| "Player non disponibile".to_string())?;
+        player.generation = player.generation.wrapping_add(1);
+        kill_current(&mut player);
+        drop(player);
+        video_host::set_enabled(&app, false, true)?;
+        emit_playback_state(&app, &shared);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // IPC locale di MPV: non è un endpoint remoto e il nome è unico per processo/sessione.
@@ -323,7 +370,7 @@ fn send_ipc(_pipe_name: &str, _command: serde_json::Value) -> Result<(), String>
 }
 
 #[tauri::command]
-fn set_paused(paused: bool, state: State<'_, SharedPlayer>) -> Result<(), String> {
+fn set_paused(paused: bool, app: AppHandle, state: State<'_, SharedPlayer>) -> Result<(), String> {
     let (pipe_name, generation) = {
         let p = state
             .lock()
@@ -343,11 +390,13 @@ fn set_paused(paused: bool, state: State<'_, SharedPlayer>) -> Result<(), String
     if p.generation == generation {
         p.paused = paused;
     }
+    drop(p);
+    emit_playback_state(&app, state.inner());
     Ok(())
 }
 
 #[tauri::command]
-fn set_volume(volume: u8, state: State<'_, SharedPlayer>) -> Result<(), String> {
+fn set_volume(volume: u8, app: AppHandle, state: State<'_, SharedPlayer>) -> Result<(), String> {
     let volume = volume.min(100);
     let (pipe_name, generation, active) = {
         let p = state
@@ -367,6 +416,8 @@ fn set_volume(volume: u8, state: State<'_, SharedPlayer>) -> Result<(), String> 
     if p.generation == generation {
         p.volume = volume;
     }
+    drop(p);
+    emit_playback_state(&app, state.inner());
     Ok(())
 }
 
@@ -375,18 +426,29 @@ fn get_playback_state(state: State<'_, SharedPlayer>) -> Result<Snapshot, String
     let p = state
         .lock()
         .map_err(|_| "Player non disponibile".to_string())?;
-    Ok(Snapshot {
+    Ok(snapshot(&p))
+}
+
+fn snapshot(p: &Player) -> Snapshot {
+    Snapshot {
         active: p.child.is_some(),
         current_url: p.current_url.clone(),
         generation: p.generation,
         paused: p.paused,
         volume: p.volume,
         mode: p.mode,
-    })
+    }
+}
+
+fn emit_playback_state(app: &AppHandle, shared: &SharedPlayer) {
+    if let Ok(player) = shared.lock() {
+        let _ = app.emit("playback-state-changed", snapshot(&player));
+    }
 }
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(video_host::SharedVideoHost::default())
         .manage(Arc::new(Mutex::new(Player {
             volume: 70,
             ..Player::default()
@@ -397,7 +459,11 @@ pub fn run() {
             stop_playback,
             set_paused,
             set_volume,
-            get_playback_state
+            get_playback_state,
+            video_host::get_video_view,
+            video_host::update_video_bounds,
+            video_host::set_video_detached,
+            video_host::set_video_fullscreen
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "Apri player", true, None::<&str>)?;
@@ -440,7 +506,13 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+                if window.label() == "video" {
+                    if let Err(error) = video_host::close_detached(window.app_handle()) {
+                        let _ = window.emit("video-view-error", error);
+                    }
+                } else {
+                    let _ = window.hide();
+                }
             }
         })
         .run(tauri::generate_context!())

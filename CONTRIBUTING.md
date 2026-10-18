@@ -20,10 +20,11 @@ Before claiming Windows playback works, record which of these manual checks you 
 6. Normal completion advances; an error does not skip automatically.
 7. Closing hides to tray; reopening works; **Esci** stops MPV and exits.
 8. Queue and volume persist on restart; no orphan MPV process remains after normal Quit.
-9. In **Video + audio**, YouTube and Twitch open one compact, always-on-top MPV window with sound; widget size stays unchanged. Check pause/resume, volume and stop in both modes.
+9. In **Video + audio**, YouTube and Twitch render inside the widget with sound and no separate player window by default. Check pause/resume, volume and stop in both modes.
 10. Switch modes while playing or paused: YouTube restarts, Twitch reconnects, video disappears in audio mode, and playback resumes unpaused. Audio mode still refuses Twitch channels without `audio_only`.
-11. Closing the video window stops without advancing or showing a playback error. A real EOF advances in the selected mode; an error stops. Check closing during buffering too.
-12. Mode survives app restart; UI reload restores the active backend mode and volume. Quit with video active leaves no MPV window/process. Check queue scrolling at 370 × 510 and the default widget size.
+    Stop from the detached window during source resolution must cancel the pending start rather than resume later.
+11. Detach, resize, reinsert and close the popout during playback, pause and buffering: the same stream and position should continue. Check pause, volume and stop from both windows. Fullscreen should keep an exit button and controls visible, then restore compact size on exit/Stop/audio mode, including after EOF/error. Escape works when the webview has keyboard focus.
+12. Mode survives app restart; video placement starts embedded. UI reload restores backend mode, placement and volume. A real EOF advances in the current placement; an error stops. Quit leaves no MPV window/process. Check queue scrolling at 370 × 510 and default size; test 100%, 150%, 200% display scaling and moves between monitors. Embedded video must remain within its area, hide in settings/tray, and never cover the control strip.
 
 ## Italiano
 
@@ -43,7 +44,8 @@ Prima di dichiarare funzionante la riproduzione Windows, indica quali controlli 
 6. Il termine normale avanza; un errore non salta automaticamente.
 7. La chiusura nasconde nella tray, la riapertura funziona, **Esci** termina MPV e l'app.
 8. Playlist e volume persistono al riavvio; nessun processo MPV orfano dopo l'uscita normale.
-9. In **Video + audio**, YouTube e Twitch aprono una sola finestra MPV piccola, sempre in primo piano e con audio; dimensioni del widget invariate. Verifica pausa/ripresa, volume e stop in entrambe le modalità.
+9. In **Video + audio**, YouTube e Twitch mostrano il video dentro il widget con audio, senza finestra player separata per impostazione predefinita. Verifica pausa/ripresa, volume e stop in entrambe le modalità.
 10. Cambia modalità durante riproduzione e pausa: YouTube riparte, Twitch si riconnette, il video scompare passando a solo audio e la riproduzione riprende senza pausa. La modalità audio continua a rifiutare Twitch senza `audio_only`.
-11. Chiudere il video ferma senza avanzare o mostrare un errore di riproduzione. La fine naturale avanza nella modalità selezionata; un errore ferma. Verifica la chiusura anche durante il buffering.
-12. La modalità resta salvata al riavvio; il reload UI ripristina modalità e volume del motore attivo. Esci con video attivo non lascia finestre/processi MPV. Verifica lo scorrimento playlist a 370 × 510 e alle dimensioni predefinite.
+    Stop dalla finestra staccata durante la risoluzione della sorgente deve annullare l'avvio in corso, senza ripartire dopo.
+11. Stacca, ridimensiona, reinserisci e chiudi il popout durante riproduzione, pausa e buffering: stream e posizione devono continuare. Verifica pausa, volume e stop da entrambe le finestre. Schermo intero deve mantenere pulsante di uscita e controlli visibili e ripristinare le dimensioni compatte all'uscita/Stop/modalità audio, anche dopo fine/errore. Esc funziona quando la webview ha il focus della tastiera.
+12. La modalità resta salvata al riavvio; il video parte integrato. Il reload UI ripristina modalità, posizione e volume del motore. La fine naturale avanza nella posizione attuale; un errore ferma. Esci non lascia finestre/processi MPV. Verifica scorrimento playlist a 370 × 510 e dimensioni predefinite; prova scaling schermo 100%, 150%, 200% e cambio monitor. Il video integrato deve restare nella propria area, nascondersi in impostazioni/tray e non coprire la barra dei controlli.

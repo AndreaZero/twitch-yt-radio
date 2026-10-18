@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { useVideoView, VideoSurface, VideoToolbar } from './VideoPanel';
+import type { PlaybackMode, Snapshot, EndEvent } from './player-types';
 import {
   AlertCircle, AudioLines, Check, ChevronDown, CircleHelp, Headphones,
   Link2, ListMusic, LoaderCircle, Pause, Play, Plus, Radio, RotateCcw,
@@ -10,18 +12,8 @@ import {
 } from 'lucide-react';
 
 type Platform = 'youtube' | 'twitch';
-type PlaybackMode = 'audio_only' | 'video_audio';
 type Track = { id: string; url: string; title: string; platform: Platform };
 type Dependencies = { mpv: boolean; ytDlp: boolean; streamlink: boolean };
-type Snapshot = {
-  active: boolean;
-  currentUrl: string | null;
-  generation: number;
-  paused: boolean;
-  volume: number;
-  mode: PlaybackMode;
-};
-type EndEvent = { generation: number; failed: boolean; stopped: boolean };
 
 const STORAGE_KEY = 'background-audio:tracks:v1';
 const VOLUME_KEY = 'background-audio:volume:v1';
@@ -76,6 +68,7 @@ export default function App() {
   const [mode, setMode] = useState<PlaybackMode>(() => localStorage.getItem(MODE_KEY) === 'video_audio' ? 'video_audio' : 'audio_only');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const videoView = useVideoView(setError);
   const [dependencies, setDependencies] = useState<Dependencies | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -87,6 +80,7 @@ export default function App() {
   const modeRef = useRef(mode);
   const activeTrackRef = useRef<Track | null>(null);
   const pendingEndRef = useRef<EndEvent | null>(null);
+  const pendingStopRef = useRef<Snapshot | null>(null);
   const handleEndedRef = useRef<(event: EndEvent) => void>(() => {});
   const playRef = useRef<(track: Track) => Promise<void>>(async () => {});
 
@@ -116,13 +110,26 @@ export default function App() {
       setCurrentId(track.id);
       setPaused(false);
       setActive(true);
-      setStatus(nextMode === 'video_audio' ? 'Video nella mini finestra MPV' : 'Riproduzione avviata');
+      setStatus(nextMode === 'video_audio' ? 'Video nel widget' : 'Riproduzione avviata');
     } catch (e) {
       setError(messageOf(e));
       setStatus('Impossibile riprodurre');
+      // A native host error can occur after MPV replaced the old process.
+      try {
+        const snapshot = await invoke<Snapshot>('get_playback_state');
+        if (!snapshot.active) { generationRef.current = null; setActive(false); setPaused(false); }
+      } catch { /* Keep the original concrete playback error. */ }
     } finally {
       busyRef.current = false;
       setBusy(false);
+      const stopped = pendingStopRef.current;
+      pendingStopRef.current = null;
+      if (stopped && stopped.generation > (generationRef.current ?? 0)) {
+        generationRef.current = null;
+        setActive(false);
+        setPaused(false);
+        setStatus('Riproduzione arrestata');
+      }
       // A process can finish while Rust is resolving or starting the next stream.
       const pending = pendingEndRef.current;
       pendingEndRef.current = null;
@@ -141,10 +148,6 @@ export default function App() {
       setStatus('Errore riproduzione');
       return;
     }
-    if (payload.stopped) {
-      setStatus('Finestra video chiusa · riproduzione arrestata');
-      return;
-    }
     const list = tracksRef.current;
     const index = list.findIndex(item => item.id === currentIdRef.current);
     const next = index >= 0 ? list[index + 1] : undefined;
@@ -157,15 +160,40 @@ export default function App() {
     if (isActive && activeTrackRef.current) {
       await play(activeTrackRef.current, nextMode);
     } else {
-      modeRef.current = nextMode;
-      setMode(nextMode);
-      setStatus(nextMode === 'video_audio' ? 'Video pronto nella mini finestra MPV' : 'Pronto per ascoltare senza video');
+      busyRef.current = true;
+      setBusy(true);
+      try {
+        // EOF may leave the video view fullscreen or detached, even while idle.
+        if (nextMode === 'audio_only') {
+          await invoke('set_video_fullscreen', { fullscreen: false });
+          await invoke('set_video_detached', { detached: false });
+        }
+        modeRef.current = nextMode;
+        setMode(nextMode);
+        setStatus(nextMode === 'video_audio' ? 'Video pronto nel widget' : 'Pronto per ascoltare senza video');
+      } catch (e) { setError(messageOf(e)); }
+      finally { busyRef.current = false; setBusy(false); }
     }
   };
 
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
+    let unlistenState: (() => void) | null = null;
+    void listen<Snapshot>('playback-state-changed', event => {
+      if (!event.payload.active && busyRef.current) { pendingStopRef.current = event.payload; return; }
+      if (!event.payload.active && !busyRef.current && event.payload.generation >= (generationRef.current ?? 0)) {
+        generationRef.current = null;
+        setActive(false);
+        setPaused(false);
+        setStatus('Riproduzione arrestata');
+        return;
+      }
+      if (event.payload.generation !== generationRef.current) return;
+      setPaused(event.payload.paused);
+      setVolume(event.payload.volume);
+      if (!event.payload.active) { generationRef.current = null; setActive(false); }
+    }).then(stop => { if (disposed) stop(); else unlistenState = stop; }).catch(() => {});
     void listen<EndEvent>('playback-ended', event => {
       if (busyRef.current) pendingEndRef.current = event.payload;
       else handleEndedRef.current(event.payload);
@@ -191,7 +219,7 @@ export default function App() {
           setStatus(snapshot.paused ? 'In pausa' : 'Riproduzione attiva');
         }
       }).catch(() => {});
-    return () => { disposed = true; unlisten?.(); };
+    return () => { disposed = true; unlisten?.(); unlistenState?.(); };
   }, []);
 
   const addUrl = async () => {
@@ -257,7 +285,7 @@ export default function App() {
   const missingDeps = dependencies && (!dependencies.mpv || !dependencies.ytDlp || !dependencies.streamlink);
 
   return (
-    <main className="app">
+    <main className={`app ${videoView.fullscreen && !videoView.detached ? 'video-fullscreen' : ''}`}>
       <header className="header">
         <div className="brand-logo"><AudioLines size={23} strokeWidth={2.2} /></div>
         <div className="brand-title">
@@ -282,23 +310,25 @@ export default function App() {
           </div>
           <p className="footnote">Le dipendenze devono essere nel PATH di Windows. Se le hai appena installate, riavvia l'app.</p>
           <p className="footnote">Chiudendo la finestra il player resta nella tray. Per terminarlo: icona tray → Esci.</p>
-          <p className="footnote">Video + audio apre una mini finestra MPV separata, sempre in primo piano (fino a 384 × 216 px iniziali). I controlli restano qui. Chiudere il video arresta la riproduzione; per continuare ad ascoltare scegli Solo audio.</p>
+          <p className="footnote">Video + audio mostra il video dentro il widget. Usa le icone accanto al selettore per staccarlo o andare a schermo intero. Chiudere la finestra staccata riporta il video qui, senza interromperlo. Solo audio riconnette la sorgente senza richiedere video.</p>
         </section>
       ) : (
         <>
-          <section className="hero">
-            <div className={`sound-art ${isActive && !paused ? 'art-live' : ''}`}>
-              {mode === 'video_audio' ? <Video size={52} strokeWidth={1.4} /> : <Headphones size={52} strokeWidth={1.4} />}
+          <section className={`hero ${mode === 'video_audio' ? 'hero-video' : ''}`}>
+            {mode === 'video_audio' ? <VideoSurface view={videoView} onError={setError}/> : <div className={`sound-art ${isActive && !paused ? 'art-live' : ''}`}>
+              <Headphones size={52} strokeWidth={1.4} />
               <div className="art-glow" />
-            </div>
+            </div>}
             <div className="status"><span className={`status-dot ${isActive && !paused ? 'dot-live' : ''}`} />{busy ? 'Connessione' : isActive ? paused ? 'In pausa' : mode === 'video_audio' ? 'Video + audio attivi' : 'Audio attivo' : 'In attesa'}</div>
             <h1>{current?.title ?? (mode === 'video_audio' ? 'Guarda in piccolo' : 'Ascolta senza video')}</h1>
             <p className="hero-description">{status}</p>
-            <div className="mode-switch" role="group" aria-label="Modalità di riproduzione">
+            <div className="view-row"><div className="mode-switch" role="group" aria-label="Modalità di riproduzione">
               <button aria-pressed={mode === 'audio_only'} disabled={busy} onClick={() => void changeMode('audio_only')}><Headphones size={14}/> Solo audio</button>
               <button aria-pressed={mode === 'video_audio'} disabled={busy} onClick={() => void changeMode('video_audio')}><Video size={14}/> Video + audio</button>
             </div>
-            <p className="mode-hint">{isActive ? 'Cambiare modalità riavvia la sorgente' : mode === 'video_audio' ? 'Mini finestra separata · sempre in primo piano' : 'Solo flusso audio · nessun video'}</p>
+            {mode === 'video_audio' && <VideoToolbar view={videoView} disabled={busy} onError={setError}/>}</div>
+            {videoView.fullscreen && !videoView.detached && error && <div className="fullscreen-error" role="alert">{error}</div>}
+            <p className="mode-hint">{isActive ? 'Cambiare modalità riavvia la sorgente' : mode === 'video_audio' ? 'Video nel widget · stacca o espandi con le icone' : 'Solo flusso audio · nessun video'}</p>
             <div className="controls">
               <button className="icon-button" aria-label="Precedente" onClick={() => void jump(-1)} disabled={!hasPrev}><SkipBack size={21} fill="currentColor"/></button>
               <button className="play-button" aria-label={isActive && !paused ? 'Pausa' : 'Riproduci'} disabled={busy || (!isActive && tracks.length === 0)} onClick={() => {
@@ -335,7 +365,7 @@ export default function App() {
             <div className="queue-head"><h2><ListMusic size={17}/> Playlist <span>{tracks.length}</span></h2>
               <button className="tiny-button" onClick={() => setShowHelp(value => !value)} title="Come funziona"><CircleHelp size={16}/></button>
             </div>
-            {showHelp && <p className="help">Aggiungi i link uno alla volta. Clicca su un elemento per riprodurlo nella modalità selezionata. Video + audio apre una mini finestra MPV; il cambio modalità riavvia YouTube dall'inizio e riconnette Twitch alla diretta. Al termine normale parte il successivo; errori e chiusura del video fermano la playlist.</p>}
+            {showHelp && <p className="help">Il video parte dentro il widget. Puoi staccarlo, reinserirlo e passare a schermo intero senza riconnettere lo stream. Chiudere la finestra staccata reinserisce il video. Il cambio Solo audio / Video + audio riavvia invece YouTube dall'inizio e riconnette Twitch alla diretta. Al termine normale parte il successivo; un errore ferma la playlist.</p>}
             <div className="queue-list">
               {tracks.length === 0 ? (
                 <div className="queue-empty"><ListMusic size={24}/><span>Nessuna sorgente aggiunta</span><small>I link appariranno qui</small></div>

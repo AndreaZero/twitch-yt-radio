@@ -13,11 +13,13 @@ The current application is displayed as **Background Audio**. The interface and 
 - Add individual YouTube videos or live Twitch channels to a local queue.
 - Choose **Solo audio** (default) or **Video + audio** in the widget. The choice is saved locally.
 - In audio mode, YouTube requests `bestaudio`; Twitch requests Streamlink's `audio_only` and reports an error when unavailable, without video fallback.
-- Video mode opens a separate, resizable MPV mini window, initially fitted within 384 × 216 pixels (video area), always on top. The control widget keeps its size; pause, volume and stop stay there.
+- Video mode displays MPV **inside the widget by default**, keeping the existing 450 × 670 window and compact controls.
+- Use the icons next to the mode selector for **fullscreen** or to **detach/reinsert** the player. These operations keep the same stream, playback position and pause state. Fullscreen keeps a control strip with an exit button; Escape also exits when the webview has keyboard focus.
+- The optional detached window is resizable and always on top, with pause, stop, volume, fullscreen and reinsert controls. Closing it returns the video to the widget and continues playback. Each app launch starts with the video embedded; detached/fullscreen placement is not saved.
 - Video mode requests YouTube video up to 720p plus audio, or Twitch's `best` stream. Twitch video may use substantially more bandwidth.
 - Changing mode during playback reopens the source: YouTube starts over and Twitch reconnects to live. Playback resumes unpaused. This is not a seamless visibility toggle.
 - Play, pause, stop, previous/next, mute, and volume controls.
-- Advance after a normal MPV process exit; stop automatic advancement on a playback error or when closing the video window. To keep listening without video, choose **Solo audio** instead of closing MPV.
+- Advance after a normal MPV process exit; stop automatic advancement on a playback error. To keep listening without video, choose **Solo audio**; Stop ends playback and returns to the compact view.
 - Persist queue entries and volume in local WebView2 storage.
 - Close the window to keep playing in the Windows tray; **Esci** (Quit) terminates the app and its MPV process.
 - Check external dependencies in settings.
@@ -72,6 +74,6 @@ Installer output: `src-tauri\target\release\bundle\nsis\`. **MPV, yt-dlp, and St
 
 The setup session confirmed executable discovery on the user's Windows machine. Repository preparation does not certify end-to-end streaming, controls, or a fresh installer build. See the [manual Windows checklist](CONTRIBUTING.md#english).
 
-The optional video window and mode switching still require manual Windows playback checks; the app is not started as part of source verification. MPV's window sizing and close binding follow the [official MPV manual](https://mpv.io/manual/stable/).
+Embedded rendering, detach/reinsert, fullscreen, DPI changes and audio/video switching still require manual Windows playback checks; the app is not started as part of source verification. Embedding uses the native HWND support in the [official MPV manual](https://mpv.io/manual/stable/#options-wid), rather than a browser media player. The integration adds a small Windows native host using `windows-sys`, already present in Tauri's dependency tree.
 
 Independent of Twitch and YouTube. Use in accordance with service terms and content rights. External tools retain their own licenses; their binaries are not redistributed here.

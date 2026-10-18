@@ -20,6 +20,18 @@
         "minHeight": 510,
         "center": true,
         "resizable": true
+      },
+      {
+        "label": "video",
+        "title": "Background Audio - Video",
+        "width": 400,
+        "height": 280,
+        "minWidth": 370,
+        "minHeight": 200,
+        "visible": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "resizable": true
       }
     ],
     "security": {

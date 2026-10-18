@@ -13,11 +13,13 @@ L'applicazione attuale si presenta come **Background Audio**. Interfaccia ed err
 - Aggiunta di singoli video YouTube o canali Twitch live a una playlist locale.
 - Scelta **Solo audio** (predefinita) o **Video + audio** nel widget, salvata localmente.
 - In modalità audio, YouTube richiede `bestaudio`; Twitch richiede `audio_only` a Streamlink e segnala un errore se non disponibile, senza fallback video.
-- La modalità video apre una mini finestra MPV separata, ridimensionabile e sempre in primo piano, inizialmente entro 384 × 216 pixel (area video). Il widget mantiene le dimensioni; pausa, volume e stop restano lì.
+- La modalità video mostra MPV **dentro il widget per impostazione predefinita**, mantenendo la finestra 450 × 670 e i controlli compatti.
+- Le icone accanto al selettore permettono **schermo intero** e **distacco/reinserimento** del player. Queste operazioni mantengono lo stesso stream, la posizione e la pausa. A schermo intero resta una barra di controllo con il pulsante per uscire; anche Esc esce quando la webview ha il focus della tastiera.
+- La finestra staccata opzionale è ridimensionabile e sempre in primo piano, con pausa, stop, volume, schermo intero e reinserimento. Chiuderla riporta il video nel widget continuando la riproduzione. Ogni avvio dell'app parte con video integrato; distacco e schermo intero non sono salvati.
 - La modalità video richiede video YouTube fino a 720p con audio, oppure il flusso Twitch `best`. Il video Twitch può consumare molta più banda.
 - Cambiare modalità durante la riproduzione riapre la sorgente: YouTube riparte dall'inizio e Twitch si riconnette alla diretta. La riproduzione riprende senza pausa. Il cambio non è continuo.
 - Play, pausa, stop, precedente/successivo, mute e volume.
-- Passaggio alla voce successiva dopo la normale uscita di MPV; nessun avanzamento automatico in caso di errore o chiusura della finestra video. Per continuare ad ascoltare senza video, scegli **Solo audio** invece di chiudere MPV.
+- Passaggio alla voce successiva dopo la normale uscita di MPV; nessun avanzamento automatico in caso di errore. Per continuare ad ascoltare senza video scegli **Solo audio**; Stop termina la riproduzione e torna alla vista compatta.
 - Playlist e volume persistenti nello storage locale di WebView2.
 - Chiusura della finestra nella tray di Windows; **Esci** termina l'app e il suo processo MPV.
 - Diagnostica delle dipendenze dal pannello impostazioni.
@@ -72,6 +74,6 @@ Output installer: `src-tauri\target\release\bundle\nsis\`. **MPV, yt-dlp e Strea
 
 La sessione di configurazione ha confermato il rilevamento degli eseguibili sul PC Windows dell'utente. La preparazione della repository non certifica streaming completo, controlli o una nuova build dell'installer. Vedi la [checklist manuale Windows](CONTRIBUTING.md#italiano).
 
-Mini finestra video e cambio modalità richiedono ancora la prova manuale della riproduzione su Windows; l'app non viene avviata durante la verifica del codice. Dimensionamento e gestione della chiusura MPV seguono il [manuale ufficiale MPV](https://mpv.io/manual/stable/).
+Rendering integrato, distacco/reinserimento, schermo intero, cambi DPI e cambio audio/video richiedono ancora la prova manuale su Windows; l'app non viene avviata durante la verifica del codice. L'integrazione usa il supporto HWND nativo del [manuale ufficiale MPV](https://mpv.io/manual/stable/#options-wid), senza player multimediale nel browser. Il piccolo host Windows usa `windows-sys`, già presente nelle dipendenze transitive di Tauri.
 
 Progetto indipendente da Twitch e YouTube. Usalo nel rispetto delle condizioni dei servizi e dei diritti sui contenuti. Gli strumenti esterni mantengono le proprie licenze; qui non ne vengono redistribuiti gli eseguibili.

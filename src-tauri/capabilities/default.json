@@ -1,6 +1,6 @@
 {
   "identifier": "default",
   "description": "Permessi minimi dell'interfaccia del player",
-  "windows": ["main"],
+  "windows": ["main", "video"],
   "permissions": ["core:default"]
 }

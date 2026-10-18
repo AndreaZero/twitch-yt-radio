@@ -7,9 +7,11 @@
 | File | Responsibility |
 | --- | --- |
 | `src/App.tsx` | React UI, URL entry, queue, local persistence, dependency diagnostics, playback events. |
+| `src/VideoPanel.tsx` | Video placeholder measurement, view controls, detached window UI and synchronized playback controls. |
 | `src/styles.css` | Compact desktop layout. |
 | `src-tauri/src/lib.rs` | Validated Rust commands, process lifecycle, Twitch resolution, MPV IPC, tray. |
-| `src-tauri/src/playback.rs` | Validated playback modes, format/window options and manual video close classification. |
+| `src-tauri/src/playback.rs` | Validated playback modes and format/input options. |
+| `src-tauri/src/video_host.rs` | Windows child host, validated/clipped physical bounds, fullscreen and reparenting between app windows. |
 | `src-tauri/src/dependencies.rs` | Resolve and validate external executable paths, including Windows install locations. |
 | `src-tauri/src/main.rs` | Native entry point. |
 | `src-tauri/capabilities/default.json` | Tauri capability configuration; no frontend shell plugin. |
@@ -20,20 +22,23 @@
 1. React validates the URL and invokes `start_playback` with URL, volume and mode (`audio_only` or `video_audio`). Omitting mode defaults to audio; unknown modes are rejected by deserialization.
 2. Rust validates HTTPS, rejects embedded credentials, limits URL length, and allows only the configured YouTube/Twitch hostnames.
 3. Audio mode uses YouTube `bestaudio` or Streamlink `audio_only`, with no video fallback. Video mode uses YouTube `bestvideo[height<=720]+bestaudio/best[height<=720]` or Twitch `best`.
-4. Rust launches MPV without a console, hiding video in audio mode or opening a separate always-on-top mini window in video mode (`--autofit=384x216`). External executables are invoked directly using arguments, not shell strings. A fixed input configuration in the app cache maps `CLOSE_WIN` to `quit 10`; other default input bindings and OSC are disabled so controls stay in React.
+4. Rust launches MPV without a console. Audio mode disables video; video mode passes `--wid=<uint32 HWND>` for an app-owned native child host over the React placeholder. Native operations run on Tauri's UI thread. React sends only bounds and view intent, never a window handle or shell command. Default MPV input bindings, keyboard/cursor input and OSC are disabled so controls stay in React.
 5. Pause and volume are sent as JSON to a local Windows named pipe. Stop terminates the child process.
 6. A monitor polls MPV exit status and emits `playback-ended`. A generation counter rejects stale completion events after a track switch or stop.
-7. React advances only after a successful exit. Failed exits display an error and do not automatically skip. Video exit code 10 means manual close, stopping without error or advancement. Completion events arriving during a start are deferred until its result, then checked against the current generation.
+7. React advances only after a successful exit. Failed exits display an error and do not automatically skip. Completion events arriving during a start are deferred until its result, then checked against the current generation. The native surface hides on completion only if the generation is still current.
+
+The hidden `video` webview window is created with the main window. Detach/reinsert reparents the app-owned host between these two windows with Win32 `SetParent`; MPV remains its child and keeps playing. Fullscreen uses the owning Tauri window and a React layout that reserves a visible control strip. Closing the detached window is intercepted and docks the video. Bounds use device pixel ratio, client-area clipping and revisions to reject out-of-order layout updates. The inactive window cannot move/hide the active surface. A DPI/resize event triggers new measurements. Main settings hide an embedded surface while retaining playback. There is no browser media decoding or local media proxy.
 
 Mode switches reopen the current URL through the same start command, reset pause, restart YouTube from the beginning and reconnect Twitch to live. Dependency/source resolution and process spawn errors leave the existing player intact. A later asynchronous MPV failure stops playback. There is no seamless switch or position restoration.
 
-There is no two-way IPC state confirmation: pause and volume reflect locally recorded command intent. The app does not currently report buffering or audible output.
+Pause, volume, start and stop emit recorded playback snapshots so controls in both webviews stay synchronized. There is no two-way MPV IPC state confirmation: pause and volume still reflect locally recorded command intent. The app does not currently report buffering or audible output.
 
 ## State and lifecycle
 
 - Rust owns the MPV child process inside `Arc<Mutex<Player>>`.
 - Queue, volume and preferred mode live in WebView2 `localStorage`; no cloud synchronization. An active backend snapshot takes precedence after a UI reload.
-- Closing the main window hides it. The separate video window remains visible until closed, stopped or switched to audio mode. Tray Quit kills MPV and exits.
+- Closing the main window hides it and any embedded video. A detached video remains visible; closing it reinserts it and shows the widget. Stop or audio mode closes the popout and exits fullscreen. Normal queue advancement preserves video placement. Tray Quit kills MPV and exits.
+- Video placement defaults to embedded on every app launch. The selected audio/video mode remains persisted; no existing audio preference is silently changed to video.
 - Existing internal identifiers (`background-audio`, `background_audio_lib`, and `dev.andreazero.backgroundaudio`) are retained. The public repository name is `twitch-yt-radio`.
 - Packaging does not include external playback binaries or publish releases.
 
