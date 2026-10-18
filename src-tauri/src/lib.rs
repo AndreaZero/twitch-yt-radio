@@ -1,3 +1,6 @@
+mod dependencies;
+mod playback;
+use playback::PlaybackMode;
 use serde::Serialize;
 use std::{
     io::Write,
@@ -24,6 +27,7 @@ struct Player {
     current_url: Option<String>,
     paused: bool,
     volume: u8,
+    mode: PlaybackMode,
 }
 
 type SharedPlayer = Arc<Mutex<Player>>;
@@ -33,6 +37,7 @@ type SharedPlayer = Arc<Mutex<Player>>;
 struct EndEvent {
     generation: u64,
     failed: bool,
+    stopped: bool,
 }
 
 #[derive(Serialize)]
@@ -43,6 +48,7 @@ struct Snapshot {
     generation: u64,
     paused: bool,
     volume: u8,
+    mode: PlaybackMode,
 }
 
 #[derive(Serialize)]
@@ -63,7 +69,8 @@ fn validate_source(value: &str) -> Result<Source, String> {
     if value.len() > 2048 {
         return Err("URL troppo lungo".into());
     }
-    let url = Url::parse(value).map_err(|_| "Inserisci un URL completo (https://...)".to_string())?;
+    let url =
+        Url::parse(value).map_err(|_| "Inserisci un URL completo (https://...)".to_string())?;
     if url.scheme() != "https" {
         return Err("Sono consentiti soltanto URL HTTPS".into());
     }
@@ -71,7 +78,9 @@ fn validate_source(value: &str) -> Result<Source, String> {
         return Err("L'URL non può contenere credenziali".into());
     }
     match url.host_str().unwrap_or("").to_ascii_lowercase().as_str() {
-        "youtube.com" | "www.youtube.com" | "m.youtube.com" | "music.youtube.com" | "youtu.be" => Ok(Source::Youtube),
+        "youtube.com" | "www.youtube.com" | "m.youtube.com" | "music.youtube.com" | "youtu.be" => {
+            Ok(Source::Youtube)
+        }
         "twitch.tv" | "www.twitch.tv" | "m.twitch.tv" => Ok(Source::Twitch),
         _ => Err("Per ora sono supportati solo YouTube e Twitch".into()),
     }
@@ -88,10 +97,7 @@ fn hide_console(command: &mut Command) {
 }
 
 fn available(binary: &str) -> bool {
-    let mut cmd = Command::new(binary);
-    cmd.arg("--version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    hide_console(&mut cmd);
-    cmd.status().map(|s| s.success()).unwrap_or(false)
+    dependencies::resolve(binary).is_ok()
 }
 
 #[tauri::command]
@@ -103,19 +109,28 @@ fn check_dependencies() -> Dependencies {
     }
 }
 
-fn resolve_twitch(url: &str) -> Result<String, String> {
+fn resolve_twitch(url: &str, mode: PlaybackMode) -> Result<String, String> {
     // Twitch espone audio_only soltanto quando il flusso lo prevede.
     // Non ripieghiamo su un flusso video nascosto: consumerebbe banda inutilmente.
-    let mut cmd = Command::new("streamlink");
-    cmd.args(["--stream-url", url, "audio_only"])
+    let streamlink = dependencies::resolve("streamlink")?;
+    let mut cmd = Command::new(streamlink);
+    cmd.args(["--stream-url", url, mode.twitch_quality()])
         .stdin(Stdio::null());
     hide_console(&mut cmd);
-    let output = cmd.output().map_err(|_| "Streamlink non trovato. Installalo e riavvia l'app".to_string())?;
+    let output = cmd
+        .output()
+        .map_err(|_| "Streamlink non trovato. Installalo e riavvia l'app".to_string())?;
     if !output.status.success() {
-        return Err("Canale offline, audio_only non disponibile o Twitch temporaneamente non accessibile".into());
+        return Err(match mode {
+            PlaybackMode::AudioOnly => "Canale offline, audio_only non disponibile o Twitch temporaneamente non accessibile",
+            PlaybackMode::VideoAudio => "Canale offline o flusso video Twitch non disponibile",
+        }.into());
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let stream_url = text.lines().map(str::trim).find(|v| v.starts_with("https://"))
+    let stream_url = text
+        .lines()
+        .map(str::trim)
+        .find(|v| v.starts_with("https://"))
         .ok_or_else(|| "Streamlink non ha restituito un flusso valido".to_string())?;
     Ok(stream_url.to_owned())
 }
@@ -144,74 +159,115 @@ fn monitor(shared: SharedPlayer, app: AppHandle, generation: u64) {
             match player.child.as_mut() {
                 Some(child) => match child.try_wait() {
                     Ok(Some(status)) => {
+                        let stopped = playback::manually_closed(player.mode, status.code());
                         player.child.take();
                         player.current_url = None;
                         player.paused = false;
-                        Some(!status.success())
+                        Some((!status.success() && !stopped, stopped))
                     }
                     Ok(None) => None,
                     Err(_) => {
                         player.child.take();
                         player.current_url = None;
-                        Some(true)
+                        Some((true, false))
                     }
                 },
                 None => return,
             }
         };
-        if let Some(failed) = ended {
-            let _ = app.emit("playback-ended", EndEvent { generation, failed });
+        if let Some((failed, stopped)) = ended {
+            let _ = app.emit(
+                "playback-ended",
+                EndEvent {
+                    generation,
+                    failed,
+                    stopped,
+                },
+            );
             return;
         }
     });
 }
 
-fn do_start(url: String, volume: u8, shared: SharedPlayer, app: AppHandle) -> Result<u64, String> {
+fn do_start(
+    url: String,
+    volume: u8,
+    mode: PlaybackMode,
+    shared: SharedPlayer,
+    app: AppHandle,
+) -> Result<u64, String> {
     let source = validate_source(&url)?;
-    if !available("mpv") {
-        return Err("MPV non trovato nel PATH. Installa MPV, abilita Add to PATH e riavvia l'app".into());
-    }
-    let playback_url = match source {
-        Source::Youtube => {
-            if !available("yt-dlp") {
-                return Err("yt-dlp non trovato nel PATH".into());
-            }
-            url.clone()
-        }
-        Source::Twitch => resolve_twitch(&url)?,
+    let mpv = dependencies::resolve("mpv")?;
+    let yt_dlp = if matches!(source, Source::Youtube) {
+        Some(dependencies::resolve("yt-dlp")?)
+    } else {
+        None
     };
-    let mut player = shared.lock().map_err(|_| "Player non disponibile".to_string())?;
-    kill_current(&mut player);
-    player.generation = player.generation.wrapping_add(1);
-    let generation = player.generation;
+    let playback_url = match source {
+        Source::Youtube => url.clone(),
+        Source::Twitch => resolve_twitch(&url, mode)?,
+    };
+    let video_input = if mode == PlaybackMode::VideoAudio {
+        let directory = app
+            .path()
+            .app_cache_dir()
+            .map_err(|e| format!("Cartella cache non disponibile: {e}"))?;
+        std::fs::create_dir_all(&directory)
+            .map_err(|e| format!("Impossibile creare la cache video: {e}"))?;
+        let path = directory.join("video-input.conf");
+        // Only this fixed binding is loaded; controls remain in the widget.
+        std::fs::write(&path, playback::VIDEO_INPUT)
+            .map_err(|e| format!("Impossibile configurare la finestra video: {e}"))?;
+        Some(path)
+    } else {
+        None
+    };
+    let mut player = shared
+        .lock()
+        .map_err(|_| "Player non disponibile".to_string())?;
+    let generation = player.generation.wrapping_add(1);
     let pipe_name = format!("background_audio_{}_{}", std::process::id(), generation);
     let pipe_path = format!(r"\\.\pipe\{}", pipe_name);
     let clamped_volume = volume.min(100);
-    let mut command = Command::new("mpv");
+    let mut command = Command::new(mpv);
     command.args([
         "--no-config",
-        "--no-video",
-        "--force-window=no",
         "--audio-display=no",
         "--no-terminal",
         "--no-osc",
         "--no-input-default-bindings",
         "--volume-max=100",
     ]);
+    command.args(mode.window_args());
+    if let Some(path) = video_input {
+        command.arg(format!("--input-conf={}", path.display()));
+    }
     command.arg(format!("--volume={clamped_volume}"));
     command.arg(format!("--input-ipc-server={pipe_path}"));
     if matches!(source, Source::Youtube) {
-        command.args(["--ytdl=yes", "--ytdl-format=bestaudio"]);
+        command.arg("--ytdl=yes");
+        command.arg(format!("--ytdl-format={}", mode.youtube_format()));
+        if let Some(path) = &yt_dlp {
+            command.arg(dependencies::ytdl_option(path));
+        }
     }
     command.arg(playback_url);
-    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     hide_console(&mut command);
-    let child = command.spawn().map_err(|e| format!("Impossibile avviare MPV: {e}"))?;
+    let child = command
+        .spawn()
+        .map_err(|e| format!("Impossibile avviare MPV: {e}"))?;
+    kill_current(&mut player);
+    player.generation = generation;
     player.child = Some(child);
     player.current_url = Some(url);
     player.ipc_name = pipe_name;
     player.volume = clamped_volume;
     player.paused = false;
+    player.mode = mode;
     drop(player);
     monitor(shared, app, generation);
     Ok(generation)
@@ -221,17 +277,23 @@ fn do_start(url: String, volume: u8, shared: SharedPlayer, app: AppHandle) -> Re
 async fn start_playback(
     url: String,
     volume: u8,
+    mode: Option<PlaybackMode>,
     app: AppHandle,
     state: State<'_, SharedPlayer>,
 ) -> Result<u64, String> {
     let shared = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || do_start(url, volume, shared, app))
-        .await.map_err(|e| format!("Errore interno: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        do_start(url, volume, mode.unwrap_or_default(), shared, app)
+    })
+    .await
+    .map_err(|e| format!("Errore interno: {e}"))?
 }
 
 #[tauri::command]
 fn stop_playback(state: State<'_, SharedPlayer>) -> Result<(), String> {
-    let mut player = state.lock().map_err(|_| "Player non disponibile".to_string())?;
+    let mut player = state
+        .lock()
+        .map_err(|_| "Player non disponibile".to_string())?;
     player.generation = player.generation.wrapping_add(1);
     kill_current(&mut player);
     Ok(())
@@ -244,7 +306,11 @@ fn send_ipc(pipe_name: &str, command: serde_json::Value) -> Result<(), String> {
     let message = format!("{}\n", command);
     for _ in 0..12 {
         match std::fs::OpenOptions::new().write(true).open(&path) {
-            Ok(mut pipe) => return pipe.write_all(message.as_bytes()).map_err(|e| format!("IPC MPV: {e}")),
+            Ok(mut pipe) => {
+                return pipe
+                    .write_all(message.as_bytes())
+                    .map_err(|e| format!("IPC MPV: {e}"))
+            }
             Err(_) => thread::sleep(Duration::from_millis(100)),
         }
     }
@@ -259,13 +325,24 @@ fn send_ipc(_pipe_name: &str, _command: serde_json::Value) -> Result<(), String>
 #[tauri::command]
 fn set_paused(paused: bool, state: State<'_, SharedPlayer>) -> Result<(), String> {
     let (pipe_name, generation) = {
-        let p = state.lock().map_err(|_| "Player non disponibile".to_string())?;
-        if p.child.is_none() { return Err("Nessuna riproduzione attiva".into()); }
+        let p = state
+            .lock()
+            .map_err(|_| "Player non disponibile".to_string())?;
+        if p.child.is_none() {
+            return Err("Nessuna riproduzione attiva".into());
+        }
         (p.ipc_name.clone(), p.generation)
     };
-    send_ipc(&pipe_name, serde_json::json!({ "command": ["set_property", "pause", paused] }))?;
-    let mut p = state.lock().map_err(|_| "Player non disponibile".to_string())?;
-    if p.generation == generation { p.paused = paused; }
+    send_ipc(
+        &pipe_name,
+        serde_json::json!({ "command": ["set_property", "pause", paused] }),
+    )?;
+    let mut p = state
+        .lock()
+        .map_err(|_| "Player non disponibile".to_string())?;
+    if p.generation == generation {
+        p.paused = paused;
+    }
     Ok(())
 }
 
@@ -273,32 +350,47 @@ fn set_paused(paused: bool, state: State<'_, SharedPlayer>) -> Result<(), String
 fn set_volume(volume: u8, state: State<'_, SharedPlayer>) -> Result<(), String> {
     let volume = volume.min(100);
     let (pipe_name, generation, active) = {
-        let p = state.lock().map_err(|_| "Player non disponibile".to_string())?;
+        let p = state
+            .lock()
+            .map_err(|_| "Player non disponibile".to_string())?;
         (p.ipc_name.clone(), p.generation, p.child.is_some())
     };
     if active {
-        send_ipc(&pipe_name, serde_json::json!({ "command": ["set_property", "volume", volume] }))?;
+        send_ipc(
+            &pipe_name,
+            serde_json::json!({ "command": ["set_property", "volume", volume] }),
+        )?;
     }
-    let mut p = state.lock().map_err(|_| "Player non disponibile".to_string())?;
-    if p.generation == generation { p.volume = volume; }
+    let mut p = state
+        .lock()
+        .map_err(|_| "Player non disponibile".to_string())?;
+    if p.generation == generation {
+        p.volume = volume;
+    }
     Ok(())
 }
 
 #[tauri::command]
 fn get_playback_state(state: State<'_, SharedPlayer>) -> Result<Snapshot, String> {
-    let p = state.lock().map_err(|_| "Player non disponibile".to_string())?;
+    let p = state
+        .lock()
+        .map_err(|_| "Player non disponibile".to_string())?;
     Ok(Snapshot {
         active: p.child.is_some(),
         current_url: p.current_url.clone(),
         generation: p.generation,
         paused: p.paused,
         volume: p.volume,
+        mode: p.mode,
     })
 }
 
 pub fn run() {
     tauri::Builder::default()
-        .manage(Arc::new(Mutex::new(Player { volume: 70, ..Player::default() })))
+        .manage(Arc::new(Mutex::new(Player {
+            volume: 70,
+            ..Player::default()
+        })))
         .invoke_handler(tauri::generate_handler![
             check_dependencies,
             start_playback,
@@ -312,7 +404,10 @@ pub fn run() {
             let hide = MenuItem::with_id(app, "hide", "Nascondi", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Esci", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &hide, &quit])?;
-            let icon = app.default_window_icon().ok_or("Icona applicazione mancante")?.clone();
+            let icon = app
+                .default_window_icon()
+                .ok_or("Icona applicazione mancante")?
+                .clone();
             TrayIconBuilder::with_id("background-audio")
                 .icon(icon)
                 .tooltip("Background Audio")
@@ -331,7 +426,9 @@ pub fn run() {
                     }
                     "quit" => {
                         if let Some(shared) = app.try_state::<SharedPlayer>() {
-                            if let Ok(mut p) = shared.lock() { kill_current(&mut p); }
+                            if let Ok(mut p) = shared.lock() {
+                                kill_current(&mut p);
+                            }
                         }
                         app.exit(0);
                     }

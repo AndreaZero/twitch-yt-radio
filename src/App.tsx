@@ -6,10 +6,11 @@ import {
   AlertCircle, AudioLines, Check, ChevronDown, CircleHelp, Headphones,
   Link2, ListMusic, LoaderCircle, Pause, Play, Plus, Radio, RotateCcw,
   Settings2, SkipBack, SkipForward, Square, Trash2, Volume2, VolumeX,
-  X,
+  Video, X,
 } from 'lucide-react';
 
 type Platform = 'youtube' | 'twitch';
+type PlaybackMode = 'audio_only' | 'video_audio';
 type Track = { id: string; url: string; title: string; platform: Platform };
 type Dependencies = { mpv: boolean; ytDlp: boolean; streamlink: boolean };
 type Snapshot = {
@@ -18,11 +19,13 @@ type Snapshot = {
   generation: number;
   paused: boolean;
   volume: number;
+  mode: PlaybackMode;
 };
-type EndEvent = { generation: number; failed: boolean };
+type EndEvent = { generation: number; failed: boolean; stopped: boolean };
 
 const STORAGE_KEY = 'background-audio:tracks:v1';
 const VOLUME_KEY = 'background-audio:volume:v1';
+const MODE_KEY = 'background-audio:mode:v1';
 
 function loadTracks(): Track[] {
   try {
@@ -70,6 +73,7 @@ export default function App() {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [isActive, setActive] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [mode, setMode] = useState<PlaybackMode>(() => localStorage.getItem(MODE_KEY) === 'video_audio' ? 'video_audio' : 'audio_only');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [dependencies, setDependencies] = useState<Dependencies | null>(null);
@@ -80,59 +84,91 @@ export default function App() {
   const currentIdRef = useRef<string | null>(null);
   const tracksRef = useRef(tracks);
   const busyRef = useRef(false);
+  const modeRef = useRef(mode);
+  const activeTrackRef = useRef<Track | null>(null);
+  const pendingEndRef = useRef<EndEvent | null>(null);
+  const handleEndedRef = useRef<(event: EndEvent) => void>(() => {});
   const playRef = useRef<(track: Track) => Promise<void>>(async () => {});
 
   useEffect(() => { tracksRef.current = tracks; localStorage.setItem(STORAGE_KEY, JSON.stringify(tracks)); }, [tracks]);
   useEffect(() => { currentIdRef.current = currentId; }, [currentId]);
   useEffect(() => { localStorage.setItem(VOLUME_KEY, String(volume)); }, [volume]);
+  useEffect(() => { localStorage.setItem(MODE_KEY, mode); }, [mode]);
 
   const refreshDependencies = async () => {
     try { setDependencies(await invoke<Dependencies>('check_dependencies')); }
     catch { setDependencies(null); }
   };
 
-  const play = async (track: Track): Promise<void> => {
+  const play = async (track: Track, nextMode = modeRef.current): Promise<void> => {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
     setError('');
-    setStatus(track.platform === 'twitch' ? 'Connessione allo stream Twitch...' : 'Apertura audio YouTube...');
+    setStatus(track.platform === 'twitch' ? 'Connessione allo stream Twitch...' : nextMode === 'video_audio' ? 'Apertura video YouTube...' : 'Apertura audio YouTube...');
     try {
-      const generation = await invoke<number>('start_playback', { url: track.url, volume });
+      const generation = await invoke<number>('start_playback', { url: track.url, volume, mode: nextMode });
       generationRef.current = generation;
       currentIdRef.current = track.id;
+      activeTrackRef.current = track;
+      modeRef.current = nextMode;
+      setMode(nextMode);
       setCurrentId(track.id);
       setPaused(false);
       setActive(true);
-      setStatus('Riproduzione avviata');
+      setStatus(nextMode === 'video_audio' ? 'Video nella mini finestra MPV' : 'Riproduzione avviata');
     } catch (e) {
       setError(messageOf(e));
       setStatus('Impossibile riprodurre');
     } finally {
       busyRef.current = false;
       setBusy(false);
+      // A process can finish while Rust is resolving or starting the next stream.
+      const pending = pendingEndRef.current;
+      pendingEndRef.current = null;
+      if (pending) handleEndedRef.current(pending);
     }
   };
   playRef.current = play;
+
+  handleEndedRef.current = payload => {
+    if (payload.generation !== generationRef.current) return;
+    generationRef.current = null;
+    setActive(false);
+    setPaused(false);
+    if (payload.failed) {
+      setError('Il flusso è terminato con un errore. Controlla la connessione o aggiorna yt-dlp/Streamlink.');
+      setStatus('Errore riproduzione');
+      return;
+    }
+    if (payload.stopped) {
+      setStatus('Finestra video chiusa · riproduzione arrestata');
+      return;
+    }
+    const list = tracksRef.current;
+    const index = list.findIndex(item => item.id === currentIdRef.current);
+    const next = index >= 0 ? list[index + 1] : undefined;
+    if (next) void playRef.current(next);
+    else setStatus('Playlist terminata');
+  };
+
+  const changeMode = async (nextMode: PlaybackMode) => {
+    if (busyRef.current || nextMode === modeRef.current) return;
+    if (isActive && activeTrackRef.current) {
+      await play(activeTrackRef.current, nextMode);
+    } else {
+      modeRef.current = nextMode;
+      setMode(nextMode);
+      setStatus(nextMode === 'video_audio' ? 'Video pronto nella mini finestra MPV' : 'Pronto per ascoltare senza video');
+    }
+  };
 
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
     void listen<EndEvent>('playback-ended', event => {
-      if (event.payload.generation !== generationRef.current) return;
-      generationRef.current = null;
-      setActive(false);
-      setPaused(false);
-      if (event.payload.failed) {
-        setError('Il flusso è terminato con un errore. Controlla la connessione o aggiorna yt-dlp/Streamlink.');
-        setStatus('Errore riproduzione');
-        return;
-      }
-      const list = tracksRef.current;
-      const index = list.findIndex(item => item.id === currentIdRef.current);
-      const next = index >= 0 ? list[index + 1] : undefined;
-      if (next) void playRef.current(next);
-      else setStatus('Playlist terminata');
+      if (busyRef.current) pendingEndRef.current = event.payload;
+      else handleEndedRef.current(event.payload);
     }).then(stop => {
       if (disposed) stop(); else unlisten = stop;
     }).catch(() => {});
@@ -141,8 +177,12 @@ export default function App() {
       .then(([snapshot, deps]) => {
         if (disposed) return;
         setDependencies(deps);
-        if (snapshot.active && snapshot.currentUrl) {
+        if (snapshot.active && snapshot.currentUrl && !busyRef.current && generationRef.current === null) {
           const match = tracksRef.current.find(item => item.url === snapshot.currentUrl);
+          activeTrackRef.current = match ?? { id: crypto.randomUUID(), ...sourceFromUrl(snapshot.currentUrl) };
+          modeRef.current = snapshot.mode;
+          setMode(snapshot.mode);
+          setVolume(snapshot.volume);
           currentIdRef.current = match?.id ?? null;
           setCurrentId(match?.id ?? null);
           generationRef.current = snapshot.generation;
@@ -222,7 +262,7 @@ export default function App() {
         <div className="brand-logo"><AudioLines size={23} strokeWidth={2.2} /></div>
         <div className="brand-title">
           <strong>Background Audio</strong>
-          <span>YOUR SOUND. NO VIDEO.</span>
+          <span>YOUR SOUND. YOUR VIEW.</span>
         </div>
         <button className="icon-button settings-trigger" title="Impostazioni" onClick={() => setShowSettings(value => !value)}>
           {showSettings ? <X size={18} /> : <Settings2 size={18} />}
@@ -242,17 +282,23 @@ export default function App() {
           </div>
           <p className="footnote">Le dipendenze devono essere nel PATH di Windows. Se le hai appena installate, riavvia l'app.</p>
           <p className="footnote">Chiudendo la finestra il player resta nella tray. Per terminarlo: icona tray → Esci.</p>
+          <p className="footnote">Video + audio apre una mini finestra MPV separata, sempre in primo piano (fino a 384 × 216 px iniziali). I controlli restano qui. Chiudere il video arresta la riproduzione; per continuare ad ascoltare scegli Solo audio.</p>
         </section>
       ) : (
         <>
           <section className="hero">
             <div className={`sound-art ${isActive && !paused ? 'art-live' : ''}`}>
-              <Headphones size={52} strokeWidth={1.4} />
+              {mode === 'video_audio' ? <Video size={52} strokeWidth={1.4} /> : <Headphones size={52} strokeWidth={1.4} />}
               <div className="art-glow" />
             </div>
-            <div className="status"><span className={`status-dot ${isActive && !paused ? 'dot-live' : ''}`} />{busy ? 'Connessione' : isActive ? paused ? 'In pausa' : 'Audio attivo' : 'In attesa'}</div>
-            <h1>{current?.title ?? 'Ascolta senza video'}</h1>
+            <div className="status"><span className={`status-dot ${isActive && !paused ? 'dot-live' : ''}`} />{busy ? 'Connessione' : isActive ? paused ? 'In pausa' : mode === 'video_audio' ? 'Video + audio attivi' : 'Audio attivo' : 'In attesa'}</div>
+            <h1>{current?.title ?? (mode === 'video_audio' ? 'Guarda in piccolo' : 'Ascolta senza video')}</h1>
             <p className="hero-description">{status}</p>
+            <div className="mode-switch" role="group" aria-label="Modalità di riproduzione">
+              <button aria-pressed={mode === 'audio_only'} disabled={busy} onClick={() => void changeMode('audio_only')}><Headphones size={14}/> Solo audio</button>
+              <button aria-pressed={mode === 'video_audio'} disabled={busy} onClick={() => void changeMode('video_audio')}><Video size={14}/> Video + audio</button>
+            </div>
+            <p className="mode-hint">{isActive ? 'Cambiare modalità riavvia la sorgente' : mode === 'video_audio' ? 'Mini finestra separata · sempre in primo piano' : 'Solo flusso audio · nessun video'}</p>
             <div className="controls">
               <button className="icon-button" aria-label="Precedente" onClick={() => void jump(-1)} disabled={!hasPrev}><SkipBack size={21} fill="currentColor"/></button>
               <button className="play-button" aria-label={isActive && !paused ? 'Pausa' : 'Riproduci'} disabled={busy || (!isActive && tracks.length === 0)} onClick={() => {
@@ -270,7 +316,7 @@ export default function App() {
               </button>
               <input aria-label="Volume" type="range" min="0" max="100" step="1" value={volume} onChange={e => setVolume(Number(e.target.value))} onPointerUp={e => void saveVolume(Number((e.target as HTMLInputElement).value))} onKeyUp={e => void saveVolume(Number((e.target as HTMLInputElement).value))} style={{ '--volume': `${volume}%` } as CSSProperties} />
               <span className="volume-value">{volume}%</span>
-              <button className="stop-button" aria-label="Stop" title="Stop" disabled={!isActive} onClick={() => void stop()}><Square size={15} fill="currentColor"/></button>
+              <button className="stop-button" aria-label="Stop" title="Stop" disabled={!isActive || busy} onClick={() => void stop()}><Square size={15} fill="currentColor"/></button>
             </div>
           </section>
 
@@ -289,7 +335,7 @@ export default function App() {
             <div className="queue-head"><h2><ListMusic size={17}/> Playlist <span>{tracks.length}</span></h2>
               <button className="tiny-button" onClick={() => setShowHelp(value => !value)} title="Come funziona"><CircleHelp size={16}/></button>
             </div>
-            {showHelp && <p className="help">Aggiungi i link uno alla volta. Puoi cliccare su qualsiasi elemento per riprodurlo. Al termine di un video YouTube parte il successivo.</p>}
+            {showHelp && <p className="help">Aggiungi i link uno alla volta. Clicca su un elemento per riprodurlo nella modalità selezionata. Video + audio apre una mini finestra MPV; il cambio modalità riavvia YouTube dall'inizio e riconnette Twitch alla diretta. Al termine normale parte il successivo; errori e chiusura del video fermano la playlist.</p>}
             <div className="queue-list">
               {tracks.length === 0 ? (
                 <div className="queue-empty"><ListMusic size={24}/><span>Nessuna sorgente aggiunta</span><small>I link appariranno qui</small></div>
@@ -301,12 +347,12 @@ export default function App() {
                     <span className="queue-info"><strong>{item.title}</strong><span className="queue-url">{item.url}</span></span>
                     <span className={`platform-tag ${item.platform}`}>{item.platform === 'twitch' ? 'LIVE' : 'YT'}</span>
                   </button>
-                  <button className="queue-delete" onClick={() => void remove(item.id)} title="Rimuovi"><Trash2 size={16}/></button>
+                  <button className="queue-delete" disabled={busy} onClick={() => void remove(item.id)} title="Rimuovi"><Trash2 size={16}/></button>
                 </div>;
               })}
             </div>
           </section>
-          <footer><span><span className="footer-dot"/> ENGINE: MPV</span><span>AUDIO ONLY · v0.1</span></footer>
+          <footer><span><span className="footer-dot"/> ENGINE: MPV</span><span>{mode === 'video_audio' ? 'VIDEO + AUDIO' : 'SOLO AUDIO'} · v0.1</span></footer>
         </>
       )}
     </main>
